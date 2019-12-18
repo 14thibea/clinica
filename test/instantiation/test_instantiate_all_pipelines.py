@@ -3,18 +3,19 @@
 # Small unit tests for all pipelines
 ##
 # test if instantiation and building of workflows is working
+from os import pardir
 import warnings
 warnings.filterwarnings("ignore")
-from os import pardir
 
 
-def test_instantiate_T1FreeSurferCrossSectional():
-    from clinica.pipelines.t1_freesurfer_cross_sectional.t1_freesurfer_cross_sectional_pipeline import T1FreeSurferCrossSectional
+def test_instantiate_T1FreeSurfer():
     from os.path import dirname, join, abspath
+    from tempfile import mkdtemp
+    from clinica.pipelines.t1_freesurfer.t1_freesurfer_pipeline import T1FreeSurfer
 
     root = dirname(abspath(join(abspath(__file__), pardir)))
     root = join(root, 'data', 'T1FreeSurferCrossSectional')
-    pipeline = T1FreeSurferCrossSectional(
+    pipeline = T1FreeSurfer(
             bids_directory=join(root, 'in', 'bids'),
             caps_directory=join(root, 'in', 'caps'),
             tsv_file=join(root, 'in', 'subjects.tsv')
@@ -49,7 +50,6 @@ def test_instantiate_T1VolumeCreateDartel():
             tsv_file=join(root, 'in', 'subjects.tsv'),
             group_id='UnitTest'
             )
-    
     pipeline.build()
 
 
@@ -98,7 +98,6 @@ def test_instantiate_T1VolumeExistingDartel():
     pipeline.build()
 
 
-
 def test_instantiate_T1VolumeExistingTemplate():
     from clinica.pipelines.t1_volume_existing_template.t1_volume_existing_template_pipeline import T1VolumeExistingTemplate
     from os.path import dirname, join, abspath
@@ -126,8 +125,8 @@ def test_instantiate_T1VolumeParcellation():
             )
     pipeline.parameters['group_id'] = 'UnitTest'
     pipeline.parameters['atlases'] = [
-            'AAL2', 'LPBA40', 
-            'Neuromorphometrics', 'AICHA', 
+            'AAL2', 'LPBA40',
+            'Neuromorphometrics', 'AICHA',
             'Hammers'
             ]
     pipeline.parameters['modulate'] = 'on'
@@ -141,16 +140,15 @@ def test_instantiate_DWIPreprocessingUsingT1():
     root = dirname(abspath(join(abspath(__file__), pardir)))
     root = join(root, 'data', 'DWIPreprocessingUsingT1')
     pipeline = DwiPreprocessingUsingT1(
-            bids_directory=join(root, 'in', 'bids'),
-            caps_directory=join(root, 'in', 'caps'),
-            tsv_file=join(root, 'in', 'subjects.tsv'),
-            low_bval=5
-            )
+        bids_directory=join(root, 'in', 'bids'),
+        caps_directory=join(root, 'in', 'caps'),
+        tsv_file=join(root, 'in', 'subjects.tsv'),
+        low_bval=5
+    )
     pipeline.parameters = {
-            'epi_param': dict([('readout_time', 0.14),  ('enc_dir', 'y')]),
+        'epi_param': dict([('readout_time', 0.14),  ('enc_dir', 'y')]),
     }
     pipeline.build()
-
 
 
 def test_instantiate_DWIPreprocessingUsingPhaseDiffFieldmap():
@@ -160,11 +158,11 @@ def test_instantiate_DWIPreprocessingUsingPhaseDiffFieldmap():
     root = dirname(abspath(join(abspath(__file__), pardir)))
     root = join(root, 'data', 'DWIPreprocessingUsingPhaseDiffFieldmap')
     pipeline = DwiPreprocessingUsingPhaseDiffFieldmap(
-            bids_directory=join(root, 'in', 'bids'),
-            caps_directory=join(root, 'in', 'caps'),
-            tsv_file=join(root, 'in', 'subjects.tsv'),
-            low_bval=5
-            )
+        bids_directory=join(root, 'in', 'bids'),
+        caps_directory=join(root, 'in', 'caps'),
+        tsv_file=join(root, 'in', 'subjects.tsv'),
+        low_bval=5
+    )
     pipeline.build()
 
 
@@ -175,9 +173,9 @@ def test_instantiate_DWIDTI():
     root = dirname(abspath(join(abspath(__file__), pardir)))
     root = join(root, 'data', 'DWIDTI')
     pipeline = DwiDti(
-            caps_directory=join(root, 'in', 'caps'),
-            tsv_file=join(root, 'in', 'subjects.tsv')
-            )
+        caps_directory=join(root, 'in', 'caps'),
+        tsv_file=join(root, 'in', 'subjects.tsv')
+    )
     pipeline.build()
 
 
@@ -188,9 +186,9 @@ def test_instantiate_DWIConnectome():
     root = dirname(abspath(join(abspath(__file__), pardir)))
     root = join(root, 'data', 'DWIConnectome')
     pipeline = DwiConnectome(
-            caps_directory=join(root, 'in', 'caps'),
-            tsv_file=join(root, 'in', 'subjects.tsv')
-            )
+        caps_directory=join(root, 'in', 'caps'),
+        tsv_file=join(root, 'in', 'subjects.tsv')
+    )
     pipeline.parameters = {
         'n_tracks' : 1000
     }
@@ -205,16 +203,16 @@ def test_instantiate_fMRIPreprocessing():
     root = dirname(abspath(join(abspath(__file__), pardir)))
     root = join(root, 'data', 'fMRIPreprocessing')
     pipeline = fMRIPreprocessing(
-            bids_directory=join(root, 'in', 'bids'),
-            caps_directory=join(root, 'in', 'caps'),
-            tsv_file=join(root, 'in', 'subjects.tsv')
-            )
+        bids_directory=join(root, 'in', 'bids'),
+        caps_directory=join(root, 'in', 'caps'),
+        tsv_file=join(root, 'in', 'subjects.tsv')
+    )
     pipeline.parameters = {
-            'full_width_at_half_maximum' : [8, 8, 8],
-            't1_native_space'            : True,
-            'freesurfer_brain_mask'      : True,
-            'unwarping'                  : True
-            }
+        'full_width_at_half_maximum' : [8, 8, 8],
+        't1_native_space'            : True,
+        'freesurfer_brain_mask'      : True,
+        'unwarping'                  : True
+    }
     pipeline.build()
 
 
@@ -225,12 +223,12 @@ def test_instantiate_PETVolume():
     root = dirname(abspath(join(abspath(__file__), pardir)))
     root = join(root, 'data', 'PETVolume')
     pipeline = PETVolume(
-            bids_directory=join(root, 'in', 'bids'),
-            caps_directory=join(root, 'in', 'caps'),
-            tsv_file=join(root, 'in', 'subjects.tsv'),
-            group_id='UnitTest',
-            fwhm_tsv=None
-            )
+        bids_directory=join(root, 'in', 'bids'),
+        caps_directory=join(root, 'in', 'caps'),
+        tsv_file=join(root, 'in', 'subjects.tsv'),
+        group_id='UnitTest',
+        fwhm_tsv=None
+    )
     pipeline.build()
 
 
@@ -239,23 +237,23 @@ def test_instantiate_StatisticsSurface():
     from os.path import dirname, join, abspath
 
     root = dirname(abspath(join(abspath(__file__), pardir)))
-    root = join(root, 'data', 'StatisticsSurface') 
+    root = join(root, 'data', 'StatisticsSurface')
     pipeline = StatisticsSurface(
             caps_directory=join(root, 'in', 'caps'),
             tsv_file=join(root, 'in', 'subjects.tsv')
             )
     pipeline.parameters = {
-            'design_matrix': '1 + group + age + sex',
-            'contrast': 'group',
-            'str_format': '%s %s %s %f %s',
-            'group_label': 'UnitTest',
-            'glm_type': 'group_comparison',
-            'custom_file': '@subject/@session/t1/freesurfer_cross_sectional/@subject_@session/surf/@hemi.thickness.fwhm@fwhm.fsaverage.mgh',
-            'feature_label': 'cortical_thickness',
-            'full_width_at_half_maximum': 20,
-            'threshold_uncorrected_pvalue': 0.001,
-            'threshold_corrected_pvalue': 0.05,
-            'cluster_threshold': 0.001
+        'design_matrix': '1 + group + age + sex',
+        'contrast': 'group',
+        'str_format': '%s %s %s %f %s',
+        'group_label': 'UnitTest',
+        'glm_type': 'group_comparison',
+        'custom_file': '@subject/@session/t1/freesurfer_cross_sectional/@subject_@session/surf/@hemi.thickness.fwhm@fwhm.fsaverage.mgh',
+        'feature_label': 'cortical_thickness',
+        'full_width_at_half_maximum': 20,
+        'threshold_uncorrected_pvalue': 0.001,
+        'threshold_corrected_pvalue': 0.05,
+        'cluster_threshold': 0.001
     }
     pipeline.build()
 
@@ -267,12 +265,12 @@ def test_instantiate_PETSurface(tmpdir):
     root = dirname(abspath(join(abspath(__file__), pardir)))
     root = join(root, 'data', 'PETSurface')
     pipeline = PetSurface(
-            bids_directory=join(root, 'in', 'bids'),
-            caps_directory=join(root, 'in', 'caps'),
-            tsv_file=join(root, 'in', 'subjects.tsv')
-            )
+        bids_directory=join(root, 'in', 'bids'),
+        caps_directory=join(root, 'in', 'caps'),
+        tsv_file=join(root, 'in', 'subjects.tsv'),
+        base_dir=str(tmpdir)
+    )
     pipeline.parameters['pet_type'] = 'fdg'
-    pipeline.parameters['wd'] = str(tmpdir)
     pipeline.build()
 
 
@@ -323,4 +321,50 @@ def test_instantiate_SpatialSVM():
     pipeline.parameters['image_type'] = 't1'
     pipeline.parameters['pet_type'] = 'fdg'
     pipeline.parameters['no_pvc'] = 'True'
+    pipeline.build()
+
+
+def test_instantiate_T1FreeSurferTemplate():
+    """Instantiation test for t1_freesurfer_template pipeline
+    """
+    from clinica.pipelines.t1_freesurfer_longitudinal.t1_freesurfer_template_pipeline import T1FreeSurferTemplate
+    from os.path import dirname, join, abspath
+    from tempfile import mkdtemp
+
+    root = dirname(abspath(join(abspath(__file__), pardir)))
+    root = join(root, 'data', 'T1FreeSurferLongitudinal')
+    # build pipeline
+    pipeline = T1FreeSurferTemplate(
+        caps_directory=join(root, 'in', 'caps'),
+        tsv_file=join(root, 'in', 'subjects.tsv'),
+        # TODO: Check if this is necessary:
+        base_dir=mkdtemp()
+    )
+    pipeline.parameters['overwrite_caps'] = 'True'
+    # Todo: Remove parameters['n_procs']
+    pipeline.parameters['n_procs'] = 4
+    pipeline.parameters['recon_all_args'] = '-qcache'
+    pipeline.build()
+
+
+def test_instantiate_T1FreeSurferLongitudinalCorrection():
+    """Instantiation test for t1_freesurfer_longitudinal_correction pipeline
+    """
+    from clinica.pipelines.t1_freesurfer_longitudinal.t1_freesurfer_longitudinal_correction_pipeline import T1FreeSurferLongitudinalCorrection
+    from os.path import dirname, join, abspath
+    from tempfile import mkdtemp
+
+    root = dirname(abspath(join(abspath(__file__), pardir)))
+    root = join(root, 'data', 'T1FreeSurferLongitudinal')
+    # build pipeline
+    pipeline = T1FreeSurferLongitudinalCorrection(
+        caps_directory=join(root, 'in', 'caps'),
+        tsv_file=join(root, 'in', 'subjects.tsv'),
+        # TODO: Check if this is necessary:
+        base_dir=mkdtemp()
+    )
+    pipeline.parameters['overwrite_caps'] = 'True'
+    # Todo: Remove parameters['n_procs']
+    pipeline.parameters['n_procs'] = 4
+    pipeline.parameters['recon_all_args'] = '-qcache'
     pipeline.build()

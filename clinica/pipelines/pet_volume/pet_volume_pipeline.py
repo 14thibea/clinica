@@ -1,6 +1,7 @@
 # coding: utf8
 
 import clinica.pipelines.engine as cpe
+from nipype import config
 
 __author__ = "Jorge Samper-Gonzalez"
 __copyright__ = "Copyright 2016-2019 The Aramis Lab Team"
@@ -10,6 +11,12 @@ __version__ = "0.1.0"
 __maintainer__ = "Jorge Samper-Gonzalez"
 __email__ = "jorge.samper-gonzalez@inria.fr"
 __status__ = "Development"
+
+
+# Use hash instead of parameters for iterables folder names
+# Otherwise path will be too long and generate OSError
+cfg = dict(execution={'parameterize_dirs': False})
+config.update_config(cfg)
 
 
 class PETVolume(cpe.Pipeline):
@@ -28,30 +35,46 @@ class PETVolume(cpe.Pipeline):
 
     """
 
-    def __init__(self, bids_directory=None, caps_directory=None, tsv_file=None, name=None, group_id='default',
+    def __init__(self,
+                 bids_directory=None,
+                 caps_directory=None,
+                 tsv_file=None,
+                 base_dir=None,
+                 name=None,
+                 group_id='default',
                  fwhm_tsv=None):
         from pandas.io.parsers import read_csv
         import os
+        from clinica.utils.exceptions import ClinicaCAPSError
+        from colorama import Fore
 
-        super(PETVolume, self).__init__(bids_directory, caps_directory, tsv_file, name)
+        super(PETVolume, self).__init__(
+            bids_directory=bids_directory,
+            caps_directory=caps_directory,
+            tsv_file=tsv_file,
+            base_dir=base_dir,
+            name=name)
 
         if not group_id.isalnum():
-            raise ValueError('Not valid group_id value. It must be composed only by letters and/or numbers')
+            raise ClinicaCAPSError(Fore.RED + '[Error] Not valid group_id value. It must be composed only by letters and/or numbers' + Fore.RESET)
+
+        if not os.path.isdir(os.path.join(os.path.abspath(caps_directory), 'groups')):
+            raise ClinicaCAPSError(Fore.RED + '[Error] There is no \'groups\' folder in your CAPS directory. (Have you run t1-volume pipeline ?)' + Fore.RESET)
 
         # Check that group already exists
         if not os.path.exists(os.path.join(os.path.abspath(caps_directory), 'groups', 'group-' + group_id)):
             error_message = group_id \
-                            + ' does not exists, please choose an other one (or maybe you need to run t1-spm-dartel).' \
-                            + '\nGroups that already exists in your CAPS directory are : \n'
+                            + ' group does not exists, please choose an other one (or maybe you need to run t1-volume-create-dartel).' \
+                            + '\nGroups that already exist in your CAPS directory are: \n'
             list_groups = os.listdir(os.path.join(os.path.abspath(caps_directory), 'groups'))
             is_empty = True
             for e in list_groups:
                 if e.startswith('group-'):
-                    error_message += e + ' \n'
+                    error_message += '\t' + e + ' \n'
                     is_empty = False
             if is_empty is True:
                 error_message += 'NO GROUP FOUND'
-            raise ValueError(error_message)
+            raise ClinicaCAPSError(Fore.RED + '[Error] ' + error_message + Fore.RESET)
 
         self._group_id = group_id
         self._suvr_region = ''
@@ -72,7 +95,7 @@ class PETVolume(cpe.Pipeline):
 
             if any(elem not in ['participant_id', 'session_id', 'fwhm_x', 'fwhm_y', 'fwhm_z'] for elem in list(fwhm_df.columns)):
                 raise IOError('The file ' + str(fwhm_tsv)
-                              + ' must contains the following columns (separated by tabulation : participant_id, session_id, fwhm_x, fwhm_y, fwhm_z), but we found '
+                              + ' must contains the following columns (separated by tabulation: participant_id, session_id, fwhm_x, fwhm_y, fwhm_z), but we found '
                               + str(list(fwhm_df.columns)) + '. Pay attention to the spaces (there should be none !)')
 
             subjects_fwhm = list(fwhm_df.participant_id)
@@ -151,75 +174,11 @@ class PETVolume(cpe.Pipeline):
 
         import nipype.interfaces.utility as nutil
         import nipype.pipeline.engine as npe
-        import nipype.interfaces.io as nio
-        import clinica.pipelines.pet_volume.pet_volume_utils as utils
         from os.path import join, split, realpath
-
-        iterables_fwhm = self._fwhm
-        if not self._apply_pvc:
-            iterables_fwhm = [[]] * len(self.subjects)
-
-        iterables_node = npe.Node(name="LoadingCLIArguments",
-                                  interface=nutil.IdentityInterface(fields=['subject_id', 'session_id', 'fwhm'],
-                                                                    mandatory_inputs=True))
-        iterables_node.iterables = [('subject_id', self.subjects),
-                                    ('session_id', self.sessions),
-                                    ('fwhm', iterables_fwhm)]
-
-        iterables_node.synchronize = True
-
-        # PET DataGrabber
-        # ===============
-        pet_bids_reader = npe.Node(nio.DataGrabber(infields=['subject_id', 'session', 'subject_repeat',
-                                                             'session_repeat'],
-                                                   outfields=['out_files']), name='pet_bids_reader')
-        pet_bids_reader.inputs.base_directory = self.bids_directory
-        pet_bids_reader.inputs.template = '%s/%s/pet/%s_%s_task-rest_acq-' + self.parameters['pet_type'] + '_pet.nii*'
-        pet_bids_reader.inputs.sort_filelist = False
-
-        # Native T1 DataGrabber
-        # ======================
-        t1_bids_reader = npe.Node(nio.DataGrabber(infields=['subject_id', 'session', 'subject_repeat',
-                                                            'session_repeat'],
-                                                  outfields=['out_files']), name='t1_bids_reader')
-        t1_bids_reader.inputs.base_directory = self.bids_directory
-        t1_bids_reader.inputs.template = '%s/%s/anat/%s_%s_T1w.nii*'
-        t1_bids_reader.inputs.sort_filelist = False
-
-        # Flow Fields DataGrabber
-        # ========================
-        flowfields_caps_reader = npe.Node(nio.DataGrabber(infields=['subject_id', 'session', 'subject_repeat',
-                                                                    'session_repeat'],
-                                                          outfields=['out_files']), name='flowfields_caps_reader')
-        flowfields_caps_reader.inputs.base_directory = join(self.caps_directory, 'subjects')
-        flowfields_caps_reader.inputs.template = '%s/%s/t1/spm/dartel/group-' + self._group_id + '/%s_%s_T1w_target-' \
-                                                 + self._group_id + '_transformation-forward_deformation.nii*'
-        flowfields_caps_reader.inputs.sort_filelist = False
-
-        # Dartel Template DataGrabber
-        # ============================
-        template_caps_reader = npe.Node(nio.DataGrabber(outfields=['out_files']),
-                                        name="template_caps_reader")
-        template_caps_reader.inputs.base_directory = self.caps_directory
-        template_caps_reader.inputs.template = 'groups/group-' + self._group_id + '/t1/group-' + self._group_id \
-                                               + '_template.nii*'
-        template_caps_reader.inputs.sort_filelist = False
-
-        # Reference Mask DataGrabber
-        # ===========================
-        reference_mask = npe.Node(nio.DataGrabber(outfields=['out_files']), name='reference_mask')
-        reference_mask.inputs.base_directory = join(split(realpath(__file__))[0], '../../resources/masks')
-        reference_mask.inputs.sort_filelist = False
-        # TODO ADD DIFFERENT PET TYPES TO PROCESS
-        if self.parameters['pet_type'] == 'fdg':
-            reference_mask.inputs.template = 'region-pons_eroded-6mm_mask.nii*'
-            self._suvr_region = 'pons'
-        elif self.parameters['pet_type'] == 'av45':
-            reference_mask.inputs.template = 'region-cerebellumPons_eroded-6mm_mask.nii*'
-            self._suvr_region = 'cerebellumPons'
-        else:
-            raise NotImplementedError('Unknown type of PET image. We currently accept as input only "fdg" or "av45"' +
-                                      ' as values.')
+        from clinica.utils.inputs import clinica_file_reader, clinica_group_reader, insensitive_glob
+        from clinica.utils.exceptions import ClinicaException
+        from clinica.iotools.utils.data_handling import check_relative_volume_location_in_world_coordinate_system
+        import clinica.utils.input_files as input_files
 
         # Tissues DataGrabber
         # ====================
@@ -231,67 +190,156 @@ class PETVolume(cpe.Pipeline):
                         6: 'background'
                         }
 
-        tissues_caps_reader = npe.Node(nio.DataGrabber(infields=['subject_id', 'session', 'subject_repeat',
-                                                                 'session_repeat', 'tissues'],
-                                                       outfields=['out_files']), name='tissues_caps_reader')
-        tissues_caps_reader.inputs.base_directory = join(self.caps_directory, 'subjects')
-        tissues_caps_reader.inputs.template = '%s/%s/t1/spm/segmentation/normalized_space/%s_%s_T1w_segm-%s_space-Ixi549Space_modulated-off_probability.nii*'
-        tissues_caps_reader.inputs.tissues = [tissue_names[t] for t in self.parameters['mask_tissues']]
-        tissues_caps_reader.inputs.sort_filelist = False
+        all_errors = []
 
-        n_tissues = len(self.parameters['mask_tissues'])
-
-        self.connect([(iterables_node, pet_bids_reader, [('subject_id', 'subject_id'),
-                                                         ('session_id', 'session'),
-                                                         ('subject_id', 'subject_repeat'),
-                                                         ('session_id', 'session_repeat')]),
-                      (iterables_node, t1_bids_reader, [('subject_id', 'subject_id'),
-                                                        ('session_id', 'session'),
-                                                        ('subject_id', 'subject_repeat'),
-                                                        ('session_id', 'session_repeat')]),
-                      (iterables_node, tissues_caps_reader, [(('subject_id', utils.expand_into_list, n_tissues),
-                                                              'subject_id'),
-                                                             (('session_id', utils.expand_into_list, n_tissues),
-                                                              'session'),
-                                                             (('subject_id', utils.expand_into_list, n_tissues),
-                                                              'subject_repeat'),
-                                                             (('session_id', utils.expand_into_list, n_tissues),
-                                                              'session_repeat')]),
-                      (iterables_node, flowfields_caps_reader, [('subject_id', 'subject_id'),
-                                                                ('session_id', 'session'),
-                                                                ('subject_id', 'subject_repeat'),
-                                                                ('session_id', 'session_repeat')]),
-                      (pet_bids_reader, self.input_node, [('out_files', 'pet_image')]),
-                      (t1_bids_reader, self.input_node, [('out_files', 't1_image_native')]),
-                      (tissues_caps_reader, self.input_node, [('out_files', 'mask_tissues')]),
-                      (flowfields_caps_reader, self.input_node, [('out_files', 'flow_fields')]),
-                      (template_caps_reader, self.input_node, [('out_files', 'dartel_template')]),
-                      (reference_mask, self.input_node, [('out_files', 'reference_mask')]),
-                      (iterables_node, self.input_node, [('fwhm', 'fwhm')])
-                      ])
-        if self._apply_pvc:
-            pvc_tissues_caps_reader = npe.Node(
-                nio.DataGrabber(infields=['subject_id', 'session', 'subject_repeat', 'session_repeat', 'tissues'],
-                                outfields=['out_files']), name='pvc_tissues_caps_reader')
-            pvc_tissues_caps_reader.inputs.base_directory = join(self.caps_directory, 'subjects')
-            pvc_tissues_caps_reader.inputs.template = '%s/%s/t1/spm/segmentation/native_space/%s_%s_T1w_segm-%s_probability.nii*'
-            pvc_tissues_caps_reader.inputs.tissues = [tissue_names[t] for t in self.parameters['pvc_mask_tissues']]
-            pvc_tissues_caps_reader.inputs.sort_filelist = False
-
-            n_pvc_tissues = len(self.parameters['pvc_mask_tissues'])
-
-            self.connect([(iterables_node, pvc_tissues_caps_reader, [(('subject_id', utils.expand_into_list,
-                                                                       n_pvc_tissues), 'subject_id'),
-                                                                     (('session_id', utils.expand_into_list,
-                                                                       n_pvc_tissues), 'session'),
-                                                                     (('subject_id', utils.expand_into_list,
-                                                                       n_pvc_tissues), 'subject_repeat'),
-                                                                     (('session_id', utils.expand_into_list,
-                                                                       n_pvc_tissues), 'session_repeat')]),
-                          (pvc_tissues_caps_reader, self.input_node, [('out_files', 'pvc_mask_tissues')])
-                          ])
+        # Grab reference mask
+        if self.parameters['pet_type'] == 'fdg':
+            reference_mask_template = 'region-pons_eroded-6mm_mask.nii*'
+            self._suvr_region = 'pons'
+            pet_file_to_grab = input_files.PET_FDG_NII
+        elif self.parameters['pet_type'] == 'av45':
+            reference_mask_template = 'region-cerebellumPons_eroded-6mm_mask.nii*'
+            self._suvr_region = 'cerebellumPons'
+            pet_file_to_grab = input_files.PET_AV45_NII
         else:
-            self.input_node.inputs.pvc_mask_tissues = []
+            raise NotImplementedError('Unknown type of PET image. We currently accept as input only "fdg" or "av45"' +
+                                      ' as values.')
+        reference_mask_path = join(split(realpath(__file__))[0], '../../resources/masks', reference_mask_template)
+        reference_mask_file = insensitive_glob(reference_mask_path)
+        if len(reference_mask_file) != 1:
+            all_errors.append('An error happened while trying to get reference mask ' + str(reference_mask_path))
+        else:
+            reference_mask_file = reference_mask_file[0]
+
+        # PET from BIDS directory
+        try:
+            pet_bids = clinica_file_reader(self.subjects,
+                                           self.sessions,
+                                           self.bids_directory,
+                                           pet_file_to_grab)
+        except ClinicaException as e:
+            all_errors.append(e)
+
+        # Native T1w-MRI
+        try:
+            t1w_bids = clinica_file_reader(self.subjects,
+                                           self.sessions,
+                                           self.bids_directory,
+                                           input_files.T1W_NII)
+        except ClinicaException as e:
+            all_errors.append(e)
+
+        # mask_tissues
+        tissues_input = []
+        for tissue_number in self.parameters['mask_tissues']:
+            try:
+                current_file = clinica_file_reader(self.subjects,
+                                                   self.sessions,
+                                                   self.caps_directory,
+                                                   {'pattern': 't1/spm/segmentation/normalized_space/*_*_T1w_segm-'
+                                                               + tissue_names[tissue_number]
+                                                               + '_space-Ixi549Space_modulated-off_probability.nii*',
+                                                    'description': 'SPM based probability of ' + tissue_names[tissue_number]
+                                                                   + ' based on T1w-MRI in Ixi549 space',
+                                                    'needed_pipeline': 't1-volume'})
+                tissues_input.append(current_file)
+            except ClinicaException as e:
+                all_errors.append(e)
+        # Tissues_input has a length of len(self.parameters['mask_tissues']). Each of these elements has a size of
+        # len(self.subjects). We want the opposite : a list of size len(self.subjects) whose elements have a size of
+        # len(self.parameters['mask_tissues']. The trick is to iter on elements with zip(*mylist)
+        tissues_input_final = []
+        for subject_tissue_list in zip(*tissues_input):
+            tissues_input_final.append(subject_tissue_list)
+        tissues_input = tissues_input_final
+
+        # Flowfields
+        try:
+            flowfields_caps = clinica_file_reader(self.subjects,
+                                                  self.sessions,
+                                                  self.caps_directory,
+                                                  {'pattern': 't1/spm/dartel/group-' + self._group_id
+                                                              + '/*_*_T1w_target-' + self._group_id
+                                                              + '_transformation-forward_deformation.nii*',
+                                                   'description': 'forward deformation of T1w to group space',
+                                                   'needed_pipeline': 't1-volume'})
+        except ClinicaException as e:
+            all_errors.append(e)
+
+        # Dartel Template
+        try:
+            final_template = clinica_group_reader(self.caps_directory,
+                                                  {'pattern': 'group-' + self._group_id + '/t1/group-'
+                                                              + self._group_id + '_template.nii*',
+                                                   'description': 'T1w template file of group ' + self._group_id,
+                                                   'needed_pipeline': 't1-volume or t1-volume-create-dartel'})
+        except ClinicaException as e:
+            all_errors.append(e)
+
+        iterables_fwhm = self._fwhm
+        if not self._apply_pvc:
+            iterables_fwhm = [[]] * len(self.subjects)
+
+        if self._apply_pvc:
+            # pvc tissues input
+            pvc_tissues_input = []
+            for tissue_number in self.parameters['pvc_mask_tissues']:
+                try:
+                    current_file = clinica_file_reader(self.subjects,
+                                                       self.sessions,
+                                                       self.caps_directory,
+                                                       {'pattern': 't1/spm/segmentation/native_space/*_*_T1w_segm-'
+                                                                   + tissue_names[tissue_number]
+                                                                   + '_probability.nii*',
+                                                        'description': 'SPM based probability of ' + tissue_names[tissue_number]
+                                                                       + ' based on T1w-MRI in native space',
+                                                        'needed_pipeline': 't1-volume'})
+                    pvc_tissues_input.append(current_file)
+                except ClinicaException as e:
+                    all_errors.append(e)
+
+            if len(all_errors) == 0:
+                pvc_tissues_input_final = []
+                for subject_tissue_list in zip(*pvc_tissues_input):
+                    pvc_tissues_input_final.append(subject_tissue_list)
+                pvc_tissues_input = pvc_tissues_input_final
+        else:
+            pvc_tissues_input = []
+
+        if len(all_errors) > 0:
+            error_message = 'Clinica faced error(s) while trying to read files in your CAPS/BIDS directories.\n'
+            for msg in all_errors:
+                error_message += str(msg)
+            raise ClinicaException(error_message)
+
+        check_relative_volume_location_in_world_coordinate_system('T1w-MRI', t1w_bids,
+                                                                  self.parameters['pet_type'] + ' PET', pet_bids,
+                                                                  self.bids_directory,
+                                                                  self.parameters['pet_type'])
+
+        read_input_node = npe.Node(name="LoadingCLIArguments",
+                                   interface=nutil.IdentityInterface(
+                                       fields=self.get_input_fields(),
+                                       mandatory_inputs=True),
+                                   iterables=[('pet_image', pet_bids),
+                                              ('t1_image_native', t1w_bids),
+                                              ('mask_tissues', tissues_input),
+                                              ('fwhm', iterables_fwhm),
+                                              ('flow_fields', flowfields_caps),
+                                              ('pvc_mask_tissues', pvc_tissues_input)],
+                                   synchronize=True)
+
+        read_input_node.inputs.reference_mask = reference_mask_file
+        read_input_node.inputs.dartel_template = final_template
+
+        self.connect([(read_input_node, self.input_node, [('pet_image', 'pet_image')]),
+                      (read_input_node, self.input_node, [('t1_image_native', 't1_image_native')]),
+                      (read_input_node, self.input_node, [('mask_tissues', 'mask_tissues')]),
+                      (read_input_node, self.input_node, [('flow_fields', 'flow_fields')]),
+                      (read_input_node, self.input_node, [('dartel_template', 'dartel_template')]),
+                      (read_input_node, self.input_node, [('reference_mask', 'reference_mask')]),
+                      (read_input_node, self.input_node, [('fwhm', 'fwhm')]),
+                      (read_input_node, self.input_node, [('pvc_mask_tissues', 'pvc_mask_tissues')])])
 
     def build_output_node(self):
         """Build and connect an output node to the pipelines.
@@ -300,8 +348,8 @@ class PETVolume(cpe.Pipeline):
         import nipype.interfaces.utility as nutil
         import nipype.pipeline.engine as npe
         import nipype.interfaces.io as nio
-        from clinica.utils.io import zip_nii
-        from clinica.utils.io import fix_join
+        from clinica.utils.filemanip import zip_nii
+        from clinica.utils.nipype import fix_join
         import re
         import clinica.pipelines.pet_volume.pet_volume_utils as utils
 
@@ -384,7 +432,7 @@ class PETVolume(cpe.Pipeline):
         from nipype.interfaces.petpvc import PETPVC
         import nipype.interfaces.utility as nutil
         import nipype.pipeline.engine as npe
-        from clinica.utils.io import unzip_nii
+        from clinica.utils.filemanip import unzip_nii
         import clinica.pipelines.pet_volume.pet_volume_utils as utils
 
         import os

@@ -14,17 +14,17 @@ __email__ = "mauricio.diaz@inria.fr"
 __status__ = "Development"
 
 import pycodestyle
+from os.path import dirname, abspath, join
 
 
 def test_coding_style():
     """Test that we conform to PEP-8."""
     style = pycodestyle.StyleGuide(
-            quiet=False,
-            ignore=['E203', 'E121', 'E123', 'E126', 'E133',
-                    'E226', 'E241', 'E242', 'E704', 'W503',
-                    'E501', 'W504', 'W505', 'W605'])
-    result = style.check_files(['clinica/'])
+        quiet=False,
+        ignore=['E203', 'E121', 'E123', 'E126', 'E133',
+                'E226', 'E241', 'E242', 'E704', 'W503',
+                'E501', 'W504', 'W505', 'W605'])
+    clinica_folder = join(dirname(dirname(abspath(__file__))), 'clinica')
+    result = style.check_files([clinica_folder])
     result.print_statistics()
-    assert result.total_errors ==  0, "Found code style errors (and warnings)."
-    pass
-
+    assert result.total_errors == 0, "Found code style errors (and warnings)."

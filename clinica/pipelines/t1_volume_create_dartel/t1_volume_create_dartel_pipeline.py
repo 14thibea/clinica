@@ -22,16 +22,22 @@ class T1VolumeCreateDartel(cpe.Pipeline):
 
     Returns:
         A clinica pipeline object containing the T1VolumeCreateDartel pipeline.
-
-    Raises:
-
-
     """
-
-    def __init__(self, bids_directory=None, caps_directory=None, tsv_file=None, name=None, group_id='default'):
+    def __init__(self,
+                 bids_directory=None,
+                 caps_directory=None,
+                 tsv_file=None,
+                 base_dir=None,
+                 name=None,
+                 group_id='default'):
         import os
 
-        super(T1VolumeCreateDartel, self).__init__(bids_directory, caps_directory, tsv_file, name)
+        super(T1VolumeCreateDartel, self).__init__(
+            bids_directory=bids_directory,
+            caps_directory=caps_directory,
+            tsv_file=tsv_file,
+            base_dir=base_dir,
+            name=name)
 
         if not group_id.isalnum():
             raise ValueError('Not valid group_id value. It must be composed only by letters and/or numbers')
@@ -39,8 +45,8 @@ class T1VolumeCreateDartel(cpe.Pipeline):
 
         # Check that group does not already exists
         if os.path.exists(os.path.join(os.path.abspath(caps_directory), 'groups', 'group-' + group_id)):
-            error_message = 'group_id : ' + group_id + ' already exists, please choose an other one.' \
-                            + ' Groups that exists in your CAPS directory are : \n'
+            error_message = 'group_id : ' + group_id + ' already exists, please choose another one.' \
+                            + ' Groups that exist in your CAPS directory are: \n'
             list_groups = os.listdir(os.path.join(os.path.abspath(caps_directory), 'groups'))
             for e in list_groups:
                 if e.startswith('group-'):
@@ -49,7 +55,7 @@ class T1VolumeCreateDartel(cpe.Pipeline):
 
         # Check that there is at least 2 subjects
         if len(self.subjects) <= 1:
-            raise ValueError('This pipelines needs at least 2 subjects to perform DARTEL, and found '
+            raise ValueError('This pipeline needs at least 2 subjects to perform DARTEL, and found '
                              + str(len(self.subjects)) + ' only in ' + self.tsv_file + '.')
 
         # Default parameters
@@ -72,7 +78,7 @@ class T1VolumeCreateDartel(cpe.Pipeline):
             A list of (string) input fields name.
         """
 
-        return ['dartel_input_images']
+        return ['dartel_inputs']
 
     def get_output_fields(self):
         """Specify the list of possible outputs of this pipelines.
@@ -88,7 +94,9 @@ class T1VolumeCreateDartel(cpe.Pipeline):
         """
 
         import nipype.pipeline.engine as npe
-        import nipype.interfaces.io as nio
+        from clinica.utils.inputs import clinica_file_reader
+        from clinica.utils.exceptions import ClinicaBIDSError, ClinicaException
+        import nipype.interfaces.utility as nutil
 
         tissue_names = {1: 'graymatter',
                         2: 'whitematter',
@@ -98,26 +106,38 @@ class T1VolumeCreateDartel(cpe.Pipeline):
                         6: 'background'
                         }
 
-        # Dartel Input Tissues DataGrabber
-        # =================================
-        dartel_input_reader = npe.MapNode(nio.DataGrabber(infields=['subject_id', 'session',
-                                                                    'subject_repeat', 'session_repeat',
-                                                                    'tissue'],
-                                                          outfields=['out_files']),
-                                          name="dartel_input_reader",
-                                          iterfield=['tissue'])
+        read_parameters_node = npe.Node(name="LoadingCLIArguments",
+                                        interface=nutil.IdentityInterface(fields=self.get_input_fields(),
+                                                                          mandatory_inputs=True))
+        all_errors = []
+        d_input = []
+        for tissue_number in self.parameters['dartel_tissues']:
+            try:
+                current_file = clinica_file_reader(self.subjects,
+                                                   self.sessions,
+                                                   self.caps_directory,
+                                                   {'pattern': 't1/spm/segmentation/dartel_input/*_*_T1w_segm-'
+                                                               + tissue_names[tissue_number] + '_dartelinput.nii*',
+                                                    'description': 'Dartel input for tissue ' + tissue_names[tissue_number]
+                                                                   + ' from T1w MRI',
+                                                    'needed_pipeline': 't1-volume-tissue-segmentation'})
+                d_input.append(current_file)
+            except ClinicaException as e:
+                all_errors.append(e)
 
-        dartel_input_reader.inputs.base_directory = self.caps_directory
-        dartel_input_reader.inputs.template = 'subjects/%s/%s/t1/spm/segmentation/dartel_input/%s_%s_T1w_segm-%s_dartelinput.nii*'
-        dartel_input_reader.inputs.subject_id = self.subjects
-        dartel_input_reader.inputs.session = self.sessions
-        dartel_input_reader.inputs.tissue = [tissue_names[t] for t in self.parameters['dartel_tissues']]
-        dartel_input_reader.inputs.subject_repeat = self.subjects
-        dartel_input_reader.inputs.session_repeat = self.sessions
-        dartel_input_reader.inputs.sort_filelist = False
+        # Raise all errors if some happened
+        if len(all_errors) > 0:
+            error_message = 'Clinica faced errors while trying to read files in your BIDS or CAPS directories.\n'
+            for msg in all_errors:
+                error_message += str(msg)
+            raise RuntimeError(error_message)
+
+        # d_input is a list of size len(self.parameters['dartel_tissues'])
+        #     Each element of this list is a list of size len(self.subjects)
+        read_parameters_node.inputs.dartel_inputs = d_input
 
         self.connect([
-            (dartel_input_reader, self.input_node, [('out_files', 'dartel_input_images')])
+            (read_parameters_node, self.input_node, [('dartel_inputs', 'dartel_input_images')])
         ])
 
     def build_output_node(self):
@@ -127,7 +147,7 @@ class T1VolumeCreateDartel(cpe.Pipeline):
         import nipype.pipeline.engine as npe
         import nipype.interfaces.io as nio
         import re
-        from clinica.utils.io import zip_nii
+        from clinica.utils.filemanip import zip_nii
 
         # Writing flowfields into CAPS
         # ============================
@@ -176,56 +196,14 @@ class T1VolumeCreateDartel(cpe.Pipeline):
     def build_core_nodes(self):
         """Build and connect the core nodes of the pipelines.
         """
-
-        import os
         import nipype.interfaces.spm as spm
-        import nipype.interfaces.matlab as mlab
         import nipype.pipeline.engine as npe
         import nipype.interfaces.utility as nutil
-        from clinica.utils.io import unzip_nii
+        from clinica.utils.filemanip import unzip_nii
+        from clinica.utils.spm import get_tpm
 
-        spm_home = os.getenv("SPM_HOME")
-        mlab_home = os.getenv("MATLABCMD")
-        mlab.MatlabCommand.set_default_matlab_cmd(mlab_home)
-        mlab.MatlabCommand.set_default_paths(spm_home)
-
-        if 'SPMSTANDALONE_HOME' in os.environ:
-            if 'MCR_HOME' in os.environ:
-                matlab_cmd = (
-                        os.path.join(
-                            os.environ['SPMSTANDALONE_HOME'], 'run_spm12.sh')
-                        + ' ' + os.environ['MCR_HOME']
-                        + ' script')
-                spm.SPMCommand.set_mlab_paths(matlab_cmd=matlab_cmd, use_mcr=True)
-                version = spm.SPMCommand().version
-            else:
-                raise EnvironmentError('MCR_HOME variable not in environnement. Althought, '
-                                       + 'SPMSTANDALONE_HOME has been found')
-        else:
-            version = spm.Info.getinfo()
-
-        if version:
-            if isinstance(version, dict):
-                spm_path = version['path']
-                if version['name'] == 'SPM8':
-                    print('You are using SPM version 8. The recommended version to use with Clinica is SPM 12. '
-                          + 'Please upgrade your SPM toolbox.')
-                    tissue_map = os.path.join(spm_path, 'toolbox/Seg/TPM.nii')
-                elif version['name'] == 'SPM12':
-                    tissue_map = os.path.join(spm_path, 'tpm/TPM.nii')
-                else:
-                    raise RuntimeError('SPM version 8 or 12 could not be found. Please upgrade your SPM toolbox.')
-            if isinstance(version, str):
-                if float(version) >= 12.7169:
-                    # Path depends on version of SPM Standalone
-                    if os.path.exists(os.path.join(str(spm_home), 'spm12_mcr/spm/spm12/tpm/')):
-                        tissue_map = os.path.join(str(spm_home), 'spm12_mcr/spm/spm12/tpm/TPM.nii')
-                    else:
-                        tissue_map = os.path.join(str(spm_home), 'spm12_mcr/spm12/spm12/tpm/TPM.nii')
-                else:
-                    raise RuntimeError('SPM standalone version not supported. Please upgrade SPM standalone.')
-        else:
-            raise RuntimeError('SPM could not be found. Please verify your SPM_HOME environment variable.')
+        # Get Tissue Probability Map from SPM
+        tissue_map = get_tpm()
 
         # Unzipping
         # =========

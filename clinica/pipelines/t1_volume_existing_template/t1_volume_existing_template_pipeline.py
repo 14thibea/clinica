@@ -12,6 +12,13 @@ __email__ = "jorge.samper-gonzalez@inria.fr"
 __status__ = "Development"
 
 
+# Use hash instead of parameters for iterables folder names
+# Otherwise path will be too long and generate OSError
+from nipype import config
+cfg = dict(execution={'parameterize_dirs': False})
+config.update_config(cfg)
+
+
 class T1VolumeExistingTemplate(cpe.Pipeline):
     """T1VolumeExistingTemplate
 
@@ -21,24 +28,30 @@ class T1VolumeExistingTemplate(cpe.Pipeline):
         subjects_sessions_list: The Subjects-Sessions list file (in .tsv format).
 
     Returns:
-        A clinica pipeline object containing the T1VolumeExistingTemplate pipelines.
-
-    Raises:
-
-
+        A clinica pipeline object containing the T1VolumeExistingTemplate pipeline.
     """
-
-    def __init__(self, bids_directory=None, caps_directory=None, tsv_file=None, name=None, group_id='default'):
+    def __init__(self,
+                 bids_directory=None,
+                 caps_directory=None,
+                 tsv_file=None,
+                 base_dir=None,
+                 name=None,
+                 group_id='default'):
         from os.path import exists, join, abspath
         from os import listdir
 
-        super(T1VolumeExistingTemplate, self).__init__(bids_directory, caps_directory, tsv_file, name)
+        super(T1VolumeExistingTemplate, self).__init__(
+            bids_directory=bids_directory,
+            caps_directory=caps_directory,
+            tsv_file=tsv_file,
+            base_dir=base_dir,
+            name=name)
 
         # Check that group already exists
         if not exists(join(abspath(caps_directory), 'groups', 'group-' + group_id)):
             error_message = 'group_id : ' + group_id + ' does not exists, ' \
-                            + 'please choose an other one. Groups that exist' \
-                            + 's in your CAPS directory are : \n'
+                            + 'please choose another one. Groups that exist' \
+                            + ' in your CAPS directory are: \n'
             list_groups = listdir(join(abspath(caps_directory), 'groups'))
             has_one_group = False
             for e in list_groups:
@@ -48,7 +61,7 @@ class T1VolumeExistingTemplate(cpe.Pipeline):
             if not has_one_group:
                 error_message = error_message + 'No group found ! ' \
                                 + 'Use t1-volume pipeline if you do not ' \
-                                + 'have a template yet ! '
+                                + 'have a template yet!'
             raise ValueError(error_message)
 
         self._group_id = group_id
@@ -112,62 +125,88 @@ class T1VolumeExistingTemplate(cpe.Pipeline):
                 'atlas_statistics']
 
     def build_input_node(self):
-        """Build and connect an input node to the pipelines.
-        """
-
-        import nipype.interfaces.io as nio
+        """Build and connect an input node to the pipelines."""
         import nipype.pipeline.engine as npe
         import nipype.interfaces.utility as nutil
-        import clinica.pipelines.t1_volume_tissue_segmentation.t1_volume_tissue_segmentation_utils as seg_utils
+        from clinica.iotools.utils.data_handling import check_volume_location_in_world_coordinate_system
+        from clinica.utils.inputs import clinica_file_reader, clinica_group_reader
+        from clinica.utils.exceptions import ClinicaException
+        import clinica.utils.input_files as input_files
+        from colorama import Fore
 
-        # Reading BIDS
+        all_errors = []
+        # Reading T1w
         # ============
-        read_node = npe.Node(name="read_node",
-                             interface=nutil.IdentityInterface(fields=['bids_images'],
-                                                               mandatory_inputs=True))
-        read_node.inputs.bids_images = seg_utils.select_bids_images(self.subjects,
-                                                                    self.sessions,
-                                                                    'T1w',
-                                                                    self.bids_layout)
+        try:
+            t1w_images = clinica_file_reader(self.subjects,
+                                             self.sessions,
+                                             self.bids_directory,
+                                             input_files.T1W_NII)
+        except ClinicaException as e:
+            all_errors.append(e)
 
-        # Dartel Iterations Templates DataGrabber
+        # Dartel Iterations Templates
         # ============================
-        templates_reader = npe.MapNode(nio.DataGrabber(infields=['iteration'],
-                                                       outfields=['out_files']),
-                                       name="templates_reader",
-                                       iterfield=['iteration'])
-        templates_reader.inputs.base_directory = self.caps_directory
-        templates_reader.inputs.template = 'groups/group-' + self._group_id + '/t1/group-' + \
-                                           self._group_id + '_iteration-%d_template.nii*'
-        templates_reader.inputs.iteration = range(1, 7)
-        templates_reader.inputs.sort_filelist = False
+        g_id = self._group_id
+        dartel_iter_templates = []
+        for i in range(1, 7):
+            try:
+                current_iter = clinica_group_reader(self.caps_directory,
+                                                    {'pattern': 'group-' + g_id + '/t1/group-' + g_id + '_iteration-'
+                                                                + str(i) + '_template.nii*',
+                                                     'description': 'iteration #' + str(i) + ' of template for group '
+                                                                    + g_id,
+                                                     'needed_pipeline': 't1-volume-create-dartel'})
+                dartel_iter_templates.append(current_iter)
+            except ClinicaException as e:
+                all_errors.append(e)
 
-        # Dartel Template DataGrabber
-        # ===========================
-        final_template_reader = npe.Node(nio.DataGrabber(infields=['group_id', 'group_id_repeat'],
-                                                         outfields=['out_files']),
-                                         name="final_template_reader")
-        final_template_reader.inputs.base_directory = self.caps_directory
-        final_template_reader.inputs.template = 'groups/group-%s/t1/group-%s_template.nii*'
-        final_template_reader.inputs.group_id = self._group_id
-        final_template_reader.inputs.group_id_repeat = self._group_id
-        final_template_reader.inputs.sort_filelist = False
+        # Dartel Template
+        # ================
+        try:
+            final_template = clinica_group_reader(self.caps_directory,
+                                                  {'pattern': 'group-' + g_id + '_template.nii*',
+                                                   'description': 'template file of group ' + g_id,
+                                                   'needed_pipeline': 't1-volume-create-dartel'})
+        except ClinicaException as e:
+            all_errors.append(e)
+
+        if len(all_errors) > 0:
+            error_message = 'Clinica faced errors while trying to read files in your BIDS or CAPS directories.\n'
+            error_message += 'Please note that you need to provide a template to use this pipeline.\n'
+            for msg in all_errors:
+                error_message += str(msg)
+            raise RuntimeError(error_message)
+
+        read_node = npe.Node(name="read_node",
+                             interface=nutil.IdentityInterface(fields=['t1w',
+                                                                       'templates_iter',
+                                                                       'final_template'],
+                                                               mandatory_inputs=True),
+                             iterables=[('t1w', t1w_images)],
+                             synchronize=True)
+
+        read_node.inputs.templates_iter = dartel_iter_templates
+        read_node.inputs.final_template = final_template
+
+        check_volume_location_in_world_coordinate_system(t1w_images, self.bids_directory)
 
         self.connect([
-            (read_node, self.input_node, [('bids_images', 'input_images')]),
-            (templates_reader, self.input_node, [('out_files', 'dartel_iteration_templates')]),
-            (final_template_reader, self.input_node, [('out_files', 'dartel_final_template')])
+            (read_node, self.input_node, [('t1w', 'input_images')]),
+            (read_node, self.input_node, [('templates_iter', 'dartel_iteration_templates')]),
+            (read_node, self.input_node, [('final_template', 'dartel_final_template')])
         ])
 
     def build_output_node(self):
         """Build and connect an output node to the pipelines.
         """
-
+        import re
         import nipype.pipeline.engine as npe
         import nipype.interfaces.io as nio
-        import clinica.pipelines.t1_volume_tissue_segmentation.t1_volume_tissue_segmentation_utils as seg_utils
-        from clinica.utils.io import zip_nii
-        import re
+        import nipype.interfaces.utility as nutil
+        from clinica.utils.filemanip import zip_nii
+        from ..t1_volume_tissue_segmentation import t1_volume_tissue_segmentation_utils as seg_utils
+        from ..t1_volume_existing_template import t1_volume_existing_template_utils as existing_template_utils
 
         # Writing Segmentation output into CAPS
         # =====================================
@@ -200,16 +239,11 @@ class T1VolumeExistingTemplate(cpe.Pipeline):
             datasink_connections.append((('t1_mni', zip_nii, True), 't1_mni'))
             datasink_infields.append('t1_mni')
 
-        datasink_iterfields = ['container'] + datasink_infields
         write_segmentation_node = npe.MapNode(name='write_segmentation_node',
-                                              iterfield=datasink_iterfields,
+                                              iterfield=datasink_infields,
                                               interface=nio.DataSink(infields=datasink_infields))
         write_segmentation_node.inputs.base_directory = self.caps_directory
         write_segmentation_node.inputs.parameterization = False
-        write_segmentation_node.inputs.container = ['subjects/' + self.subjects[i] + '/' + self.sessions[i]
-                                                    + '/t1/spm/segmentation'
-                                                    for i in range(len(self.subjects))]
-
         write_segmentation_node.inputs.regexp_substitutions = [
             (r'(.*)c1(sub-.*)(\.nii(\.gz)?)$', r'\1\2_segm-graymatter\3'),
             (r'(.*)c2(sub-.*)(\.nii(\.gz)?)$', r'\1\2_segm-whitematter\3'),
@@ -229,20 +263,25 @@ class T1VolumeExistingTemplate(cpe.Pipeline):
             (r'trait_added', r'')
         ]
 
+        extract_container_node_write_segmentation = npe.Node(nutil.Function(input_names=['filename'],
+                                                                            output_names=['container_path'],
+                                                                            function=existing_template_utils.container_name_for_write_segmentation),
+                                                             name='extract_container_node_write_segmentation')
+
         self.connect([
-            (self.output_node, write_segmentation_node, datasink_connections)
+            (self.output_node, write_segmentation_node, datasink_connections),
+            (self.input_node, extract_container_node_write_segmentation, [('input_images', 'filename')]),
+            (extract_container_node_write_segmentation, write_segmentation_node, [('container_path', 'container')])
         ])
 
         # Writing flowfields into CAPS
         # ============================
         write_flowfields_node = npe.MapNode(name='write_flowfields_node',
-                                            iterfield=['container', 'flow_fields'],
+                                            iterfield=['flow_fields'],
                                             interface=nio.DataSink(infields=['flow_fields']))
         write_flowfields_node.inputs.base_directory = self.caps_directory
         write_flowfields_node.inputs.parameterization = False
-        write_flowfields_node.inputs.container = ['subjects/' + self.subjects[i] + '/' + self.sessions[i] +
-                                                  '/t1/spm/dartel/group-' + self._group_id
-                                                  for i in range(len(self.subjects))]
+
         write_flowfields_node.inputs.regexp_substitutions = [
             (r'(.*)_Template(\.nii(\.gz)?)$', r'\1\2'),
             (r'(.*)c1(sub-.*)(\.nii(\.gz)?)$', r'\1\2_segm-graymatter\3'),
@@ -257,22 +296,26 @@ class T1VolumeExistingTemplate(cpe.Pipeline):
              r'\1\2_target-' + re.escape(self._group_id) + r'_transformation-forward_deformation\3'),
             (r'trait_added', r'')
         ]
-
+        extract_container_node_write_flowfields = npe.Node(nutil.Function(input_names=['filename', 'group_id'],
+                                                                          output_names=['container_path'],
+                                                                          function=existing_template_utils.container_name_for_write_normalized),
+                                                           name='extract_container_node_write_flowfields')
+        extract_container_node_write_flowfields.inputs.group_id = self._group_id
         self.connect([
-            (self.output_node, write_flowfields_node, [(('dartel_flow_fields', zip_nii, True), 'flow_fields')])
+            (self.output_node, write_flowfields_node, [(('dartel_flow_fields', zip_nii, True), 'flow_fields')]),
+            (self.input_node, extract_container_node_write_flowfields, [('input_images', 'filename')]),
+            (extract_container_node_write_flowfields, write_flowfields_node, [('container_path', 'container')])
         ])
 
         # Writing normalized images (and smoothed) into CAPS
         # ==================================================
         write_normalized_node = npe.MapNode(name='write_normalized_node',
-                                            iterfield=['container', 'normalized_files', 'smoothed_normalized_files'],
+                                            iterfield=['normalized_files', 'smoothed_normalized_files'],
                                             interface=nio.DataSink(infields=['normalized_files',
                                                                              'smoothed_normalized_files']))
         write_normalized_node.inputs.base_directory = self.caps_directory
         write_normalized_node.inputs.parameterization = False
-        write_normalized_node.inputs.container = ['subjects/' + self.subjects[i] + '/' + self.sessions[i] +
-                                                  '/t1/spm/dartel/group-' + self._group_id
-                                                  for i in range(len(self.subjects))]
+
         write_normalized_node.inputs.regexp_substitutions = [
             (r'(.*)c1(sub-.*)(\.nii(\.gz)?)$', r'\1\2_segm-graymatter_probability\3'),
             (r'(.*)c2(sub-.*)(\.nii(\.gz)?)$', r'\1\2_segm-whitematter_probability\3'),
@@ -288,16 +331,19 @@ class T1VolumeExistingTemplate(cpe.Pipeline):
             (r'trait_added', r'')
         ]
 
+        extract_container_node_write_normalized = npe.Node(nutil.Function(input_names=['filename', 'group_id'],
+                                                                          output_names=['container_path'],
+                                                                          function=existing_template_utils.container_name_for_write_normalized),
+                                                           name='extract_container_node_write_normalized')
+        extract_container_node_write_normalized.inputs.group_id = self._group_id
+
         # Writing atlases statistics into CAPS
         # ==================================================
         write_atlas_node = npe.MapNode(name='write_atlas_node',
-                                            iterfield=['container', 'atlas_statistics'],
+                                            iterfield=['atlas_statistics'],
                                             interface=nio.DataSink(infields=['atlas_statistics']))
         write_atlas_node.inputs.base_directory = self.caps_directory
         write_atlas_node.inputs.parameterization = False
-        write_atlas_node.inputs.container = ['subjects/' + self.subjects[i] + '/' + self.sessions[i] +
-                                             '/t1/spm/dartel/group-' + self._group_id + '/atlas_statistics'
-                                             for i in range(len(self.subjects))]
         write_atlas_node.inputs.regexp_substitutions = [
             (r'(.*atlas_statistics)/atlas_statistics/mwc1(sub-.*_T1w).*(_space-.*_map-graymatter_statistics\.tsv)$',
              r'\1/\2\3'),
@@ -306,72 +352,37 @@ class T1VolumeExistingTemplate(cpe.Pipeline):
             (r'trait_added', r'')
         ]
 
+        extract_container_node_atlas = npe.Node(nutil.Function(input_names=['filename', 'group_id'],
+                                                               output_names=['container_path'],
+                                                               function=existing_template_utils.container_name_for_atlas),
+                                                name='extract_container_node_atlas')
+        extract_container_node_atlas.inputs.group_id = self._group_id
         self.connect([
             (self.output_node, write_normalized_node, [(('normalized_files', zip_nii, True), 'normalized_files'),
                                                        (('smoothed_normalized_files', zip_nii, True),
                                                         'smoothed_normalized_files')]),
-            (self.output_node, write_atlas_node, [('atlas_statistics', 'atlas_statistics')])
+            (self.input_node, extract_container_node_write_normalized, [('input_images', 'filename')]),
+            (extract_container_node_write_normalized, write_normalized_node, [('container_path', 'container')]),
+            (self.output_node, write_atlas_node, [('atlas_statistics', 'atlas_statistics')]),
+            (self.input_node, extract_container_node_atlas, [('input_images', 'filename')]),
+            (extract_container_node_atlas, write_atlas_node, [('container_path', 'container')])
         ])
 
     def build_core_nodes(self):
         """Build and connect the core nodes of the pipelines.
         """
-
-        import os
-        import platform
         import nipype.interfaces.spm as spm
-        import nipype.interfaces.matlab as mlab
         import nipype.pipeline.engine as npe
         import nipype.interfaces.utility as nutil
-        import clinica.pipelines.t1_volume_tissue_segmentation.t1_volume_tissue_segmentation_utils as seg_utils
-        import clinica.pipelines.t1_volume_existing_dartel.t1_volume_existing_dartel_utils as existing_dartel_utils
-        import clinica.pipelines.t1_volume_dartel2mni.t1_volume_dartel2mni_utils as dartel2mni_utils
-        from clinica.utils.io import unzip_nii
+        from ..t1_volume_tissue_segmentation import t1_volume_tissue_segmentation_utils as seg_utils
+        from ..t1_volume_existing_dartel import t1_volume_existing_dartel_utils as existing_dartel_utils
+        from ..t1_volume_dartel2mni import t1_volume_dartel2mni_utils as dartel2mni_utils
+        from ..t1_volume_parcellation import t1_volume_parcellation_utils as parcellation_utils
+        from clinica.utils.filemanip import unzip_nii
+        from clinica.utils.spm import get_tpm
 
-        spm_home = os.getenv("SPM_HOME")
-        mlab_home = os.getenv("MATLABCMD")
-        mlab.MatlabCommand.set_default_matlab_cmd(mlab_home)
-        mlab.MatlabCommand.set_default_paths(spm_home)
-
-        if 'SPMSTANDALONE_HOME' in os.environ:
-            if 'MCR_HOME' in os.environ:
-                matlab_cmd = os.path.join(os.environ['SPMSTANDALONE_HOME'],
-                                          'run_spm12.sh') \
-                             + ' ' + os.environ['MCR_HOME'] \
-                             + ' script'
-                spm.SPMCommand.set_mlab_paths(matlab_cmd=matlab_cmd, use_mcr=True)
-                version = spm.SPMCommand().version
-            else:
-                raise EnvironmentError('MCR_HOME variable not in environnement. Althought, '
-                                       + 'SPMSTANDALONE_HOME has been found')
-        else:
-            version = spm.Info.getinfo()
-
-        if version:
-            if isinstance(version, dict):
-                spm_path = version['path']
-                if version['name'] == 'SPM8':
-                    print('You are using SPM version 8. The recommended version to use with Clinica is SPM 12. '
-                          + 'Please upgrade your SPM toolbox.')
-                    tissue_map = os.path.join(spm_path, 'toolbox/Seg/TPM.nii')
-                elif version['name'] == 'SPM12':
-                    tissue_map = os.path.join(spm_path, 'tpm/TPM.nii')
-                else:
-                    raise RuntimeError('SPM version 8 or 12 could not be found. Please upgrade your SPM toolbox.')
-            if isinstance(version, str):
-                if float(version) >= 12.7169:
-                    if platform.system() == 'Darwin':
-                        tissue_map = os.path.join(str(spm_home), 'spm12.app/Contents/MacOS/spm12_mcr/spm12/spm12/tpm/TPM.nii')
-                    else:
-                        # Path depends on version of SPM Standalone
-                        if os.path.exists(os.path.join(str(spm_home), 'spm12_mcr/spm/spm12/tpm/')):
-                            tissue_map = os.path.join(str(spm_home), 'spm12_mcr/spm/spm12/tpm/TPM.nii')
-                        else:
-                            tissue_map = os.path.join(str(spm_home), 'spm12_mcr/spm12/spm12/tpm/TPM.nii')
-                else:
-                    raise RuntimeError('SPM standalone version not supported. Please upgrade SPM standalone.')
-        else:
-            raise RuntimeError('SPM could not be found. Please verify your SPM_HOME environment variable.')
+        # Get Tissue Probability Map from SPM
+        tissue_map = get_tpm()
 
         # Unzipping Images
         # ===============================
@@ -492,12 +503,12 @@ class T1VolumeExistingTemplate(cpe.Pipeline):
         # Atlas Statistics
         # ================
         atlas_stats_node = npe.MapNode(nutil.Function(input_names=['in_image',
-                                                                   'in_atlas_list'],
+                                                                   'atlas_list'],
                                                       output_names=['atlas_statistics'],
-                                                      function=dartel2mni_utils.atlas_statistics),
+                                                      function=parcellation_utils.atlas_statistics),
                                        name='atlas_stats_node',
                                        iterfield=['in_image'])
-        atlas_stats_node.inputs.in_atlas_list = self.parameters['atlas_list']
+        atlas_stats_node.inputs.atlas_list = self.parameters['atlas_list']
 
         # Connection
         # ==========
@@ -530,7 +541,6 @@ class T1VolumeExistingTemplate(cpe.Pipeline):
                                                            self.parameters['tissue_classes']), 'flowfield_files')]),
             (unzip_template_node, dartel2mni_node, [('out_file', 'template_file')]),
             (dartel2mni_node, self.output_node, [('normalized_files', 'normalized_files')]),
-            (dartel2mni_node, atlas_stats_node, [(('normalized_files', dartel2mni_utils.select_gm_images),
-                                                  'in_image')]),
+            (dartel2mni_node, atlas_stats_node, [(('normalized_files', dartel2mni_utils.select_gm_images), 'in_image')]),
             (atlas_stats_node, self.output_node, [('atlas_statistics', 'atlas_statistics')])
         ])

@@ -90,50 +90,72 @@ class ClinicaClassLoader:
 
 
 # Nice display
-def custom_traceback(exctype, value, exc_traceback):
+def custom_traceback(exc_type, exc_value, exc_traceback):
     import traceback
     import math
     from colorama import Fore
+    from clinica.utils.exceptions import ClinicaException
+    from clinica.utils.stream import cprint
 
-    print(Fore.RED + '\n' + '*' * 23 + '\n*** Clinica crashed ***\n' + '*' * 23 + '\n' + Fore.RESET)
-    print(Fore.YELLOW + 'Exception type:' + Fore.RESET, exctype.__name__)
-    print(Fore.YELLOW + 'Exception value:' + Fore.RESET, value)
-    print('Errors can come from various reasons : '
-          + '\n\t * third party softwares '
-          + '\n\t * wrong paths given as inputs'
-          + '\n\t * ...'
-          + '\nDocumentation can be found here : ' + Fore.BLUE + 'http://www.clinica.run/doc/' + Fore.RESET
-          + '\nIf you need support, do not hesitate to ask : ' + Fore.BLUE + 'https://groups.google.com/forum/#!forum/clinica-user' + Fore.RESET
-          + '\nBelow are displayed information that were gathered when Clinica crashed. This will help to understand what happened '
-          + 'if you transfert those information to the Clinica development team.\n' + Fore.RESET)
+    if issubclass(exc_type, ClinicaException):
+        cprint(exc_value)
+    elif issubclass(exc_type, KeyboardInterrupt):
+        cprint('\n%s[Error] Program interrupted by the user. Clinica will now exit...%s' %
+               (Fore.RED, Fore.RESET))
+    else:
+        cprint(Fore.RED + '\n' + '*' * 23 + '\n*** Clinica crashed ***\n' + '*' * 23 + '\n' + Fore.RESET)
+        cprint('%sException type:%s %s' % (Fore.YELLOW, Fore.RESET, exc_type.__name__))
+        cprint('%sException value:%s %s' % (Fore.YELLOW, Fore.RESET, exc_value))
+        cprint('Below are displayed information that were gathered when Clinica crashed. This will help to understand '
+               'what happened if you transfer those information to the Clinica development team.\n')
 
-    frames = traceback.extract_tb(exc_traceback)
-    framewidth = int(math.ceil(math.log(len(frames)) / math.log(10)))
-    filewidth = 0
-    linewidth = 0
-    functionwidth = 0
-    for frame in frames:
-        filewidth = max(filewidth, len(frame[0]))
-        linewidth = max(linewidth, frame[1])
-        functionwidth = max(functionwidth, len(frame[2]))
-    linewidth = int(math.ceil(math.log(linewidth) / math.log(10)))
-    print('=' * (filewidth + linewidth + functionwidth + linewidth))
-    for i in range(len(frames)):
-        t = '{}' + ' ' * (1 + framewidth - len(str(i))) + Fore.RED \
-            + '{}' + ' ' * (1 + filewidth - len(frames[i][0])) + Fore.RESET \
-            + '{}' + ' ' * (1 + linewidth - len(str(frames[i][1]))) + Fore.GREEN \
-            + '{}' + ' ' * (1 + functionwidth - len(frames[i][2])) + Fore.RESET + '{}'
-        print(t.format(i, frames[i][0], frames[i][1], frames[i][2],
-                       frames[i][3]))
+        frames = traceback.extract_tb(exc_traceback)
+        framewidth = int(math.ceil(math.log(len(frames)) / math.log(10)))
+        filewidth = 0
+        linewidth = 0
+        functionwidth = 0
+        for frame in frames:
+            filewidth = max(filewidth, len(frame[0]))
+            linewidth = max(linewidth, frame[1])
+            functionwidth = max(functionwidth, len(frame[2]))
+        linewidth = int(math.ceil(math.log(linewidth) / math.log(10)))
+        cprint('=' * (filewidth + linewidth + functionwidth + linewidth))
+        for i in range(len(frames)):
+            t = '{}' + ' ' * (1 + framewidth - len(str(i))) + Fore.RED \
+                + '{}' + ' ' * (1 + filewidth - len(frames[i][0])) + Fore.RESET \
+                + '{}' + ' ' * (1 + linewidth - len(str(frames[i][1]))) + Fore.GREEN \
+                + '{}' + ' ' * (1 + functionwidth - len(frames[i][2])) + Fore.RESET + '{}'
+            cprint(t.format(i, frames[i][0], frames[i][1], frames[i][2], frames[i][3]))
+        cprint('=' * (filewidth + linewidth + functionwidth + linewidth))
+
+    if not issubclass(exc_type, KeyboardInterrupt):
+        cprint('\nDocumentation can be found here: %shttp://www.clinica.run/doc/%s\n'
+               'If you need support, do not hesitate to ask: %shttps://groups.google.com/forum/#!forum/clinica-user%s\n'
+               'Alternatively, you can also open an issue on GitHub: %shttps://github.com/aramis-lab/clinica/issues%s' %
+               (Fore.BLUE, Fore.RESET, Fore.BLUE, Fore.RESET, Fore.BLUE, Fore.RESET))
 
 
 def execute():
+    import os
     import argparse
     from colorama import Fore
     import warnings
+    import logging
 
     # Suppress potential warnings
     warnings.filterwarnings("ignore")
+
+    # Remove warnings from duecredit package in order to silent
+    # "Assuming non interactive session since isatty found missing" message
+    logging.getLogger("duecredit.utils").setLevel(logging.ERROR)
+
+    # Add warning message if PYTHONPATH is not empty
+    # cf https://groups.google.com/forum/#!topic/clinica-user/bVgifEdkg20
+    python_path = os.environ.get('PYTHONPATH', '')
+    if python_path:
+        print('%s[Warning] The PYTHONPATH environment variable is not empty.'
+              ' Make sure there is no interference with Clinica (content of PYTHONPATH: %s).%s' %
+              (Fore.YELLOW, python_path, Fore.RESET))
 
     # Nice traceback when clinica crashes
     sys.excepthook = custom_traceback
@@ -168,32 +190,34 @@ def execute():
     """
     from clinica.engine import CmdParser
 
-    from clinica.pipelines.t1_freesurfer_cross_sectional.t1_freesurfer_cross_sectional_cli import T1FreeSurferCrossSectionalCLI  # noqa
-    from clinica.pipelines.t1_volume_tissue_segmentation.t1_volume_tissue_segmentation_cli import T1VolumeTissueSegmentationCLI  # noqa
-    from clinica.pipelines.t1_volume_create_dartel.t1_volume_create_dartel_cli import T1VolumeCreateDartelCLI  # noqa
-    from clinica.pipelines.t1_volume_existing_dartel.t1_volume_existing_dartel_cli import T1VolumeExistingDartelCLI  # noqa
-    from clinica.pipelines.t1_volume_dartel2mni.t1_volume_dartel2mni_cli import T1VolumeDartel2MNICLI  # noqa
-    from clinica.pipelines.t1_volume_new_template.t1_volume_new_template_cli import T1VolumeNewTemplateCLI  # noqa
-    from clinica.pipelines.t1_volume_existing_template.t1_volume_existing_template_cli import T1VolumeExistingTemplateCLI  # noqa
+    from clinica.pipelines.t1_freesurfer.t1_freesurfer_cli import T1FreeSurferCLI
+    # from clinica.pipelines.t1_freesurfer_longitudinal.t1_freesurfer_longitudinal_cli import T1FreeSurferLongitudinalCLI
+    from clinica.pipelines.t1_volume_tissue_segmentation.t1_volume_tissue_segmentation_cli import T1VolumeTissueSegmentationCLI
+    from clinica.pipelines.t1_volume_create_dartel.t1_volume_create_dartel_cli import T1VolumeCreateDartelCLI
+    from clinica.pipelines.t1_volume_existing_dartel.t1_volume_existing_dartel_cli import T1VolumeExistingDartelCLI
+    from clinica.pipelines.t1_volume_dartel2mni.t1_volume_dartel2mni_cli import T1VolumeDartel2MNICLI
+    from clinica.pipelines.t1_volume_new_template.t1_volume_new_template_cli import T1VolumeNewTemplateCLI
+    from clinica.pipelines.t1_volume_existing_template.t1_volume_existing_template_cli import T1VolumeExistingTemplateCLI
     from clinica.pipelines.t1_volume_parcellation.t1_volume_parcellation_cli import T1VolumeParcellationCLI
-    from clinica.pipelines.dwi_preprocessing_using_phasediff_fieldmap.dwi_preprocessing_using_phasediff_fieldmap_cli import DwiPreprocessingUsingPhaseDiffFieldmapCli  # noqa
-    from clinica.pipelines.dwi_preprocessing_using_t1.dwi_preprocessing_using_t1_cli import DwiPreprocessingUsingT1Cli  # noqa
-    from clinica.pipelines.dwi_dti.dwi_dti_cli import DwiDtiCli  # noqa
-    # from clinica.pipelines.dwi_connectome.dwi_connectome_cli import DwiConnectomeCli  # noqa
-    from clinica.pipelines.fmri_preprocessing.fmri_preprocessing_cli import fMRIPreprocessingCLI  # noqa
-    from clinica.pipelines.pet_volume.pet_volume_cli import PETVolumeCLI  # noqa
-    from clinica.pipelines.pet_surface.pet_surface_cli import PetSurfaceCLI  # noqa
-    from clinica.pipelines.machine_learning_spatial_svm.spatial_svm_cli import SpatialSVMCLI  # noqa
-    from clinica.pipelines.statistics_surface.statistics_surface_cli import StatisticsSurfaceCLI  # noqa
+    from clinica.pipelines.dwi_preprocessing_using_phasediff_fieldmap.dwi_preprocessing_using_phasediff_fieldmap_cli import DwiPreprocessingUsingPhaseDiffFieldmapCli
+    from clinica.pipelines.dwi_preprocessing_using_t1.dwi_preprocessing_using_t1_cli import DwiPreprocessingUsingT1Cli
+    from clinica.pipelines.dwi_dti.dwi_dti_cli import DwiDtiCli
+    from clinica.pipelines.dwi_connectome.dwi_connectome_cli import DwiConnectomeCli
+    from clinica.pipelines.fmri_preprocessing.fmri_preprocessing_cli import fMRIPreprocessingCLI
+    from clinica.pipelines.pet_volume.pet_volume_cli import PETVolumeCLI
+    from clinica.pipelines.pet_surface.pet_surface_cli import PetSurfaceCLI
+    from clinica.pipelines.machine_learning_spatial_svm.spatial_svm_cli import SpatialSVMCLI
+    from clinica.pipelines.statistics_surface.statistics_surface_cli import StatisticsSurfaceCLI
     pipelines = ClinicaClassLoader(baseclass=CmdParser,
                                    extra_dir="pipelines").load()
     pipelines += [
-        T1FreeSurferCrossSectionalCLI(),
+        T1FreeSurferCLI(),
         T1VolumeNewTemplateCLI(),
+        # T1FreeSurferLongitudinalCLI(),
         DwiPreprocessingUsingPhaseDiffFieldmapCli(),
         DwiPreprocessingUsingT1Cli(),
         DwiDtiCli(),
-        # DwiConnectomeCli(),
+        DwiConnectomeCli(),
         fMRIPreprocessingCLI(),
         PETVolumeCLI(),
         PetSurfaceCLI(),
@@ -213,29 +237,23 @@ def execute():
         formatter_class=argparse.RawTextHelpFormatter,
         help='To run pipelines on BIDS/CAPS datasets.'
     )
-    run_parser.description = (
-            Fore.GREEN
-            + 'Run pipelines on BIDS/CAPS datasets.'
-            + Fore.RESET
-    )
-    run_parser._positionals.title = (
-            Fore.YELLOW
-            + 'clinica run expects one of the following pipelines'
-            + Fore.RESET
-    )
+    run_parser.description = '%sRun pipelines on BIDS/CAPS datasets.%s' % \
+                             (Fore.GREEN, Fore.RESET)
+    run_parser._positionals.title = '%sclinica run expects one of the following pipelines%s' % \
+                                    (Fore.GREEN, Fore.RESET)
 
     init_cmdparser_objects(
-            parser,
-            run_parser.add_subparsers(metavar='', dest='run'),
-            pipelines
+        parser,
+        run_parser.add_subparsers(metavar='', dest='run'),
+        pipelines
     )
 
     """
     convert category: convert one of the supported datasets into BIDS hierarchy
     """
-    from clinica.iotools.converters.aibl_to_bids.aibl_to_bids_cli import AiblToBidsCLI  # noqa
-    from clinica.iotools.converters.adni_to_bids.adni_to_bids_cli import AdniToBidsCLI  # noqa
-    from clinica.iotools.converters.oasis_to_bids.oasis_to_bids_cli import OasisToBidsCLI  # noqa
+    from clinica.iotools.converters.aibl_to_bids.aibl_to_bids_cli import AiblToBidsCLI
+    from clinica.iotools.converters.adni_to_bids.adni_to_bids_cli import AdniToBidsCLI
+    from clinica.iotools.converters.oasis_to_bids.oasis_to_bids_cli import OasisToBidsCLI
     from clinica.iotools.converters.nifd_to_bids.nifd_to_bids_cli import NifdToBidsCLI  # noga
 
     converters = ClinicaClassLoader(baseclass=CmdParser,
@@ -252,21 +270,15 @@ def execute():
         add_help=False,
         help='To convert unorganized datasets into a BIDS hierarchy.',
     )
-    convert_parser.description = (
-            Fore.GREEN
-            + 'Tools to convert unorganized datasets into a BIDS hierarchy.'
-            + Fore.RESET
-    )
-    convert_parser._positionals.title = (
-            Fore.YELLOW
-            + 'clinica convert expects one of the following datasets'
-            + Fore.RESET
-    )
+    convert_parser.description = '%sTools to convert unorganized datasets into a BIDS hierarchy.%s' % \
+                                 (Fore.GREEN, Fore.RESET)
+    convert_parser._positionals.title = '%sclinica convert expects one of the following datasets%s' % \
+                                        (Fore.YELLOW, Fore.RESET)
     convert_parser._optionals.title = OPTIONAL_TITLE
     init_cmdparser_objects(
-            parser,
-            convert_parser.add_subparsers(metavar='', dest='convert'),
-            converters
+        parser,
+        convert_parser.add_subparsers(metavar='', dest='convert'),
+        converters
     )
 
     """
@@ -275,30 +287,29 @@ def execute():
     from clinica.iotools.utils.data_handling_cli import CmdParserSubjectsSessions
     from clinica.iotools.utils.data_handling_cli import CmdParserMergeTsv
     from clinica.iotools.utils.data_handling_cli import CmdParserMissingModalities
-
+    from clinica.iotools.utils.data_handling_cli import CmdParserCenterNifti
     io_tools = [
         CmdParserSubjectsSessions(),
         CmdParserMergeTsv(),
         CmdParserMissingModalities(),
+        CmdParserCenterNifti()
     ]
 
     HELP_IO_TOOLS = 'Tools to handle BIDS/CAPS datasets.'
-    io_parser = sub_parser.add_parser('iotools',
-                                      add_help=False,
-                                      help=HELP_IO_TOOLS,
-                                      )
-    io_parser.description = (Fore.GREEN + HELP_IO_TOOLS + Fore.RESET)
-    io_parser._positionals.title = (
-            Fore.YELLOW
-            + 'clinica iotools expects one of the following BIDS/CAPS utilities'
-            + Fore.RESET
+    io_parser = sub_parser.add_parser(
+        'iotools',
+        add_help=False,
+        help=HELP_IO_TOOLS,
     )
+    io_parser.description = '%s%s%s' % (Fore.GREEN, HELP_IO_TOOLS, Fore.RESET)
+    io_parser._positionals.title = '%sclinica iotools expects one of the following BIDS/CAPS utilities%s' % \
+                                   (Fore.YELLOW, Fore.RESET)
     io_parser._optionals.title = OPTIONAL_TITLE
 
     init_cmdparser_objects(
-            parser,
-            io_parser.add_subparsers(metavar='', dest='iotools'),
-            io_tools
+        parser,
+        io_parser.add_subparsers(metavar='', dest='iotools'),
+        io_tools
     )
 
     """
@@ -306,7 +317,7 @@ def execute():
     """
     from clinica.engine import CmdParser
 
-    from clinica.pipelines.t1_freesurfer_cross_sectional.t1_freesurfer_cross_sectional_visualizer import T1FreeSurferVisualizer
+    from clinica.pipelines.t1_freesurfer.t1_freesurfer_visualizer import T1FreeSurferVisualizer
 
     visualizers = ClinicaClassLoader(baseclass=CmdParser,
                                      extra_dir="pipelines").load()
@@ -320,16 +331,10 @@ def execute():
         formatter_class=argparse.RawTextHelpFormatter,
         help='To visualize outputs of Clinica pipelines.'
     )
-    visualize_parser.description = (
-        Fore.GREEN
-        + 'Visualize outputs of Clinica pipelines.'
-        + Fore.RESET
-    )
-    visualize_parser._positionals.title = (
-        Fore.YELLOW
-        + 'clinica visualize expects one of the following pipelines'
-        + Fore.RESET
-    )
+    visualize_parser.description = '%sVisualize outputs of Clinica pipelines.%s' % \
+                                   (Fore.GREEN, Fore.RESET)
+    visualize_parser._positionals.title = '%sclinica visualize expects one of the following pipelines%s' % \
+                                          (Fore.YELLOW, Fore.RESET)
 
     init_cmdparser_objects(
         parser,
@@ -346,24 +351,17 @@ def execute():
         help=('To generate pre-filled files when creating '
               'new pipelines (for developers).'),
     )
-    generate_parser.description = (
-            Fore.GREEN
-            + ('Generate pre-filled files when creating new pipelines '
-               '(for  developers).')
-            + Fore.RESET
-    )
-    generate_parser._positionals.title = (
-            Fore.YELLOW
-            + 'clinica generate expects one of the following tools'
-            + Fore.RESET
-    )
+    generate_parser.description = '%sGenerate pre-filled files when creating new pipelines (for  developers).%s' % \
+                                  (Fore.GREEN, Fore.RESET)
+    generate_parser._positionals.title = '%sclinica generate expects one of the following tools%s' % \
+                                         (Fore.YELLOW, Fore.RESET)
     generate_parser._optionals.title = OPTIONAL_TITLE
 
     from clinica.engine.template import CmdGenerateTemplates
     init_cmdparser_objects(
-            parser,
-            generate_parser.add_subparsers(metavar='', dest='generate'),
-            [CmdGenerateTemplates()]
+        parser,
+        generate_parser.add_subparsers(metavar='', dest='generate'),
+        [CmdGenerateTemplates()]
     )
 
     """
@@ -397,16 +395,21 @@ def execute():
     try:
         argcomplete.autocomplete(parser)
         args, unknown_args = parser.parse_known_args()
+        if unknown_args:
+            if ('--verbose' in unknown_args) or ('-v' in unknown_args):
+                cprint("Verbose detected")
+                args.verbose = True
+            unknown_args = [i for i in unknown_args if i != '-v']
+            unknown_args = [i for i in unknown_args if i != '--verbose']
+            if unknown_args:
+                print('%s[Warning] Unknown flag(s) detected: %s. This will be ignored by Clinica%s' %
+                      (Fore.YELLOW, unknown_args, Fore.RESET))
     except SystemExit:
         exit(0)
     except Exception:
+        print("%s\n[Error] You wrote wrong arguments on the command line. Clinica will now exit.\n%s" % (Fore.RED, Fore.RESET))
         parser.print_help()
         exit(-1)
-
-    # if unknown_args:
-    #    if '--verbose' or '-v' in unknown_args:
-    #        cprint('Verbose flag detected')
-    #    raise ValueError('Unknown flag detected: %s' % unknown_args)
 
     if 'run' in args and hasattr(args, 'func') is False:
         # Case when we type `clinica run` on the terminal
@@ -447,17 +450,7 @@ def execute():
         import logging as python_logging
         from logging import Filter, ERROR
         import os
-
-        # Resolve bug
-        # "Assuming non interactive session since isatty found missing"
-        # at the begining of any pipeline caused by logger in duecredit package
-        # (utils.py)
-        # Deactivate stdout, then reactivate it
-        sys.stdout = open(os.devnull, 'w')
-        from nipype import config
-        sys.stdout = sys.__stdout__
-
-        from nipype import logging
+        from nipype import config, logging
 
         # Configure Nipype logger for our needs
         config.update_config({'logging': {'workflow_level': 'INFO',
@@ -476,11 +469,17 @@ def execute():
             """
             def filter(self, record):
                 if record.levelno >= ERROR:
-                    cprint("An ERROR was generated: please check the log file for more information")
+                    import datetime
+                    now = datetime.datetime.now().strftime('%H:%M:%S')
+                    cprint(
+                        '%s[%s]%s An error was found: please check the log file (%s) or crash file '
+                        '(nipypecli crash <pklz_file>) for details. Clinica is still running.' %
+                        (Fore.RED, now, Fore.RESET, args.logname))
                 return True
 
-        logger = logging.getLogger('nipype.workflow')
-        logger.addFilter(LogFilter())
+        if args.verbose:
+            logger = logging.getLogger('nipype.workflow')
+            logger.addFilter(LogFilter())
 
         # Remove all handlers associated with the root logger object
         for handler in python_logging.root.handlers[:]:
@@ -519,7 +518,7 @@ def execute():
         python_logging.basicConfig(
             format=logging.fmt, datefmt=logging.datefmt, stream=Stream())
 
-    # Finally, run the pipelines
+    # Finally, run the command
     args.func(args)
 
 

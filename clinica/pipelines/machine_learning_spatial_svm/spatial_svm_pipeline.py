@@ -65,6 +65,9 @@ class SpatialSVM(cpe.Pipeline):
         from clinica.utils.stream import cprint
         from os.path import exists, join, abspath
         from os import listdir
+        from clinica.utils.exceptions import ClinicaCAPSError, ClinicaException
+        from clinica.utils.inputs import clinica_file_reader, clinica_group_reader
+        import clinica.utils.input_files as input_files
 
         # Check that group-id already exists
         if not exists(join(abspath(self.caps_directory), 'groups', 'group-' + self.parameters['group_id'])):
@@ -90,69 +93,63 @@ class SpatialSVM(cpe.Pipeline):
         pet_type = self.parameters['pet_type']
         no_pvc = self.parameters['no_pvc']
 
-        participant_id_pycaps = [sub[4:] for sub in self.subjects]
-        session_id_pycaps = [ses[4:] for ses in self.sessions]
-
-        input_image = []
-        subjects_not_found = []
+        all_errors = []
         if image_type == 't1':
-            for i, sub in enumerate(self.subjects):
-                input_image_single_subject = join(self.caps_directory,
-                                                  'subjects', sub, self.sessions[i], 't1/spm/dartel/group-'
-                                                  + self.parameters['group_id'], sub + '_' + self.sessions[i]
-                                                  + '_T1w_segm-graymatter_space-Ixi549Space_modulated-on_probability.nii.gz')
-                if not exists(input_image_single_subject):
-                    subjects_not_found.append(input_image_single_subject)
-                else:
-                    input_image.append(input_image_single_subject)
+            try:
+                input_image = clinica_file_reader(self.subjects,
+                                                  self.sessions,
+                                                  self.caps_directory,
+                                                  {'pattern': 't1/spm/dartel/group-' + self.parameters['group_id']
+                                                              + '/*_T1w_segm-graymatter_space-Ixi549Space_modulated-on_probability.nii.gz',
+                                                   'description': 'graymatter tissue segmented in T1w MRI in Ixi549 space',
+                                                   'needed_pipeline': 't1-volume-tissue-segmentation'})
+            except ClinicaException as e:
+                all_errors.append(e)
 
         elif image_type is 'pet':
             if no_pvc.lower() == 'true':
-                for i, sub in enumerate(self.subjects):
-
-                    input_image_single_subject = join(self.caps_directory,
-                                                      'subjects', sub, self.sessions[i], 'pet/preprocessing/group-'
-                                                      + self.parameters['group_id'], sub + '_' + self.sessions[i]
-                                                      + '_task-rest_acq-' + pet_type + '_pet_space-Ixi549Space_suvr-pons_pet.nii.gz')
-                    if not exists(input_image_single_subject):
-                        subjects_not_found.append(input_image_single_subject)
-                    else:
-                        input_image.append(input_image_single_subject)
+                try:
+                    input_image = clinica_file_reader(self.subjects,
+                                                      self.sessions,
+                                                      self.caps_directory,
+                                                      {'pattern': 'pet/preprocessing/group-' + self.parameters['group_id']
+                                                                  + '/*_pet_space-Ixi549Space_suvr-pons_pet.nii.gz',
+                                                       'description': pet_type + ' PET in Ixi549 space',
+                                                       'needed_pipeline': 'pet-volume'})
+                except ClinicaException as e:
+                    all_errors.append(e)
 
             elif no_pvc.lower() == 'false':
-                subjects_not_found = []
-                for i, sub in enumerate(self.subjects):
+                try:
+                    input_image = clinica_file_reader(self.subjects,
+                                                      self.sessions,
+                                                      self.caps_directory,
+                                                      {'pattern': 'pet/preprocessing/group-' + self.parameters['group_id']
+                                                                  + '_pet_space-Ixi549Space_pvc-rbv_suvr-pons_pet.nii.gz',
+                                                       'description': pet_type + ' PET partial volume corrected (RBV) in Ixi549 space',
+                                                       'needed_pipeline': 'pet-volume with PVC'})
+                except ClinicaException as e:
+                    all_errors.append(e)
 
-                    input_image_single_subject = join(self.caps_directory,
-                                                      'subjects', sub, self.sessions[i], 'pet/preprocessing/group-'
-                                                      + self.parameters['group_id'], sub + '_' + self.sessions[i]
-                                                      + '_task-rest_acq-' + pet_type + '_pet_space-Ixi549Space_pvc-rbv_suvr-pons_pet.nii.gz')
-                    if not exists(input_image_single_subject):
-                        subjects_not_found.append(input_image_single_subject)
-                    else:
-                        input_image.append(input_image_single_subject)
             else:
                 raise ValueError(no_pvc + ' is not a valid keyword for -no_pvc'
                                  + ':only True or False are accepted (string)')
         else:
             raise ValueError('Image type ' + image_type + ' unknown')
+        try:
+            dartel_input = clinica_group_reader(self.caps_directory,
+                                                {'pattern': 'group-' + self.parameters['group_id'] + '_template.nii*',
+                                                 'description': 'template file of group ' + self.parameters['group_id'],
+                                                 'needed_pipeline': 't1-volume or t1-volume-create-dartel'})
+        except ClinicaException as e:
+            all_errors.append(e)
 
-        if len(subjects_not_found) > 0:
-            error_string = ''
-            for file in subjects_not_found:
-                error_string = error_string + file + '\n'
-            raise IOError('Following files were not found :\n' + error_string)
-
-        if len(input_image) != len(self.subjects):
-            raise IOError(str(len(input_image)) + ' file(s) found. ' + str(len(self.subjects)) + ' are expected')
-
-        dartel_input = [join(self.caps_directory,
-                             'groups',
-                             'group-' + self.parameters['group_id'],
-                             't1',
-                             'group-' + self.parameters['group_id'] + '_template.nii.gz')]
-        if not exists(dartel_input[0]):
-            raise IOError('Dartel Input ' + dartel_input[0] + ' does not seem to exist')
+        # Raise all errors if some happened
+        if len(all_errors) > 0:
+            error_message = 'Clinica faced errors while trying to read files in your CAPS directories.\n'
+            for msg in all_errors:
+                error_message += str(msg)
+            raise ClinicaCAPSError(error_message)
 
         read_parameters_node.inputs.dartel_input = dartel_input
         read_parameters_node.inputs.input_image = input_image
@@ -166,12 +163,6 @@ class SpatialSVM(cpe.Pipeline):
     def build_output_node(self):
         """Build and connect an output node to the pipeline.
         """
-
-        # In the same idea as the input node, this output node is supposedly
-        # used to write the output fields in a CAPS. It should be executed only
-        # if this pipeline output is not already connected to a next Clinica
-        # pipeline.
-
         pass
 
     def build_core_nodes(self):

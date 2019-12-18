@@ -6,19 +6,16 @@ import clinica.engine as ce
 class T1VolumeTissueSegmentationCLI(ce.CmdParser):
 
     def define_name(self):
-        """Define the sub-command name to run this pipelines.
-        """
+        """Define the sub-command name to run this pipeline."""
         self._name = 't1-volume-tissue-segmentation'
 
     def define_description(self):
-        """Define a description of this pipeline.
-        """
+        """Define a description of this pipeline."""
         self._description = 'Tissue segmentation, bias correction and spatial normalization to MNI space' \
                             + ' of T1w images with SPM:\nhttp://clinica.run/doc/Pipelines/T1_Volume/'
 
     def define_options(self):
-        """Define the sub-command arguments
-        """
+        """Define the sub-command arguments."""
         from clinica.engine.cmdparser import PIPELINE_CATEGORIES
         # Clinica compulsory arguments (e.g. BIDS, CAPS, group_id)
         clinica_comp = self._args.add_argument_group(PIPELINE_CATEGORIES['CLINICA_COMPULSORY'])
@@ -30,24 +27,21 @@ class T1VolumeTissueSegmentationCLI(ce.CmdParser):
         optional = self._args.add_argument_group(PIPELINE_CATEGORIES['OPTIONAL'])
         optional.add_argument("-s", "--smooth",
                               nargs='+', type=int, default=[8],
-                              help="A list of integers specifying the different isomorphic FWHM in millimeters to smooth the image (default: --smooth 8).")
+                              help="A list of integers specifying the different isomorphic FWHM in millimeters "
+                                   "to smooth the image (default: --smooth 8).")
         # Clinica standard arguments (e.g. --n_procs)
-        clinica_opt = self._args.add_argument_group(PIPELINE_CATEGORIES['CLINICA_OPTIONAL'])
-        clinica_opt.add_argument("-tsv", "--subjects_sessions_tsv",
-                                 help='TSV file containing a list of subjects with their sessions.')
-        clinica_opt.add_argument("-wd", "--working_directory",
-                                 help='Temporary directory to store pipelines intermediate results')
-        clinica_opt.add_argument("-np", "--n_procs",
-                                 metavar=('N'), type=int,
-                                 help='Number of cores used to run in parallel')
+        self.add_clinica_standard_arguments()
         # Advanced arguments (i.e. tricky parameters)
         advanced = self._args.add_argument_group(PIPELINE_CATEGORIES['ADVANCED'])
         advanced.add_argument("-t", "--tissue_classes",
                               metavar='', nargs='+', type=int, default=[1, 2, 3], choices=range(1, 7),
-                              help="Tissue classes (1: gray matter (GM), 2: white matter (WM), 3: cerebrospinal fluid (CSF), 4: bone, 5: soft-tissue, 6: background) to save (default: GM, WM and CSF i.e. --tissue_classes 1 2 3).")
+                              help="Tissue classes (1: gray matter (GM), 2: white matter (WM), "
+                                   "3: cerebrospinal fluid (CSF), 4: bone, 5: soft-tissue, 6: background) to save "
+                                   "(default: GM, WM and CSF i.e. --tissue_classes 1 2 3).")
         advanced.add_argument("-dt", "--dartel_tissues",
                               metavar='', nargs='+', type=int, default=[1, 2, 3], choices=range(1, 7),
-                              help='Tissues to use for DARTEL template calculation (default: GM, WM and CSF i.e. --dartel_tissues 1 2 3).')
+                              help='Tissues to use for DARTEL template calculation '
+                                   '(default: GM, WM and CSF i.e. --dartel_tissues 1 2 3).')
         advanced.add_argument("-tpm", "--tissue_probability_maps",
                               metavar=('TissueProbabilityMap.nii'),
                               help='Tissue probability maps to use for segmentation (default: TPM from SPM software).')
@@ -58,19 +52,20 @@ class T1VolumeTissueSegmentationCLI(ce.CmdParser):
                               action='store_true',
                               help="Save warped modulated images for tissues specified in --tissue_classes flag.")
         # advanced.add_argument("-wdf", "--write_deformation_fields", nargs=2, type=bool,
-        #                         help="Option to save the deformation fields from Unified Segmentation. Both inverse and forward fields can be saved. Format: a list of 2 booleans. [Inverse, Forward]")
+        #                         help="Option to save the deformation fields from Unified Segmentation. Both inverse "
+        #                              "and forward fields can be saved. Format: a list of 2 booleans. [Inverse, Forward]")
 
     def run_command(self, args):
-        """
-        """
-        from tempfile import mkdtemp
-        from clinica.utils.stream import cprint
-        from clinica.pipelines.t1_volume_tissue_segmentation.t1_volume_tissue_segmentation_pipeline import T1VolumeTissueSegmentation
+        """Run the pipeline with defined args."""
+        from networkx import Graph
+        from .t1_volume_tissue_segmentation_pipeline import T1VolumeTissueSegmentation
+        from clinica.utils.ux import print_end_pipeline, print_crash_files_and_exit
 
         pipeline = T1VolumeTissueSegmentation(
             bids_directory=self.absolute_path(args.bids_directory),
             caps_directory=self.absolute_path(args.caps_directory),
-            tsv_file=self.absolute_path(args.subjects_sessions_tsv)
+            tsv_file=self.absolute_path(args.subjects_sessions_tsv),
+            base_dir=self.absolute_path(args.working_directory),
         )
 
         pipeline.parameters.update({
@@ -83,13 +78,13 @@ class T1VolumeTissueSegmentationCLI(ce.CmdParser):
             'save_t1_mni': True
             })
 
-        if args.working_directory is None:
-            args.working_directory = mkdtemp()
-        pipeline.base_dir = self.absolute_path(args.working_directory)
-
         if args.n_procs:
-            pipeline.run(plugin='MultiProc', plugin_args={'n_procs': args.n_procs})
+            exec_pipeline = pipeline.run(plugin='MultiProc',
+                                         plugin_args={'n_procs': args.n_procs})
         else:
-            pipeline.run()
+            exec_pipeline = pipeline.run()
 
-        cprint("The " + self._name + " pipeline has completed. You can now delete the working directory (" + args.working_directory + ").")
+        if isinstance(exec_pipeline, Graph):
+            print_end_pipeline(self.name, pipeline.base_dir, pipeline.base_dir_was_specified)
+        else:
+            print_crash_files_and_exit(args.logname, pipeline.base_dir)

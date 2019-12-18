@@ -5,22 +5,17 @@ import clinica.engine as ce
 
 class DwiPreprocessingUsingT1Cli(ce.CmdParser):
 
-    def __init__(self):
-        super(DwiPreprocessingUsingT1Cli, self).__init__()
-
     def define_name(self):
-        """Define the sub-command name to run this pipeline.
-        """
+        """Define the sub-command name to run this pipeline."""
         self._name = 'dwi-preprocessing-using-t1'
 
     def define_description(self):
-        """Define a description of this pipeline.
-        """
-        self._description = 'Preprocessing of raw DWI datasets using a T1w image:\nhttp://clinica.run/doc/Pipelines/DWI_Preprocessing/'
+        """Define a description of this pipeline."""
+        self._description = ('Preprocessing of raw DWI datasets using a T1w image:\n'
+                             'http://clinica.run/doc/Pipelines/DWI_Preprocessing/')
 
     def define_options(self):
-        """Define the sub-command arguments.
-        """
+        """Define the sub-command arguments."""
         from clinica.engine.cmdparser import PIPELINE_CATEGORIES
         # Clinica compulsory arguments (e.g. BIDS, CAPS, group_id)
         clinica_comp = self._args.add_argument_group(PIPELINE_CATEGORIES['CLINICA_COMPULSORY'])
@@ -34,38 +29,29 @@ class DwiPreprocessingUsingT1Cli(ce.CmdParser):
                               metavar=('N'), type=int, default=5,
                               help='Define the b0 volumes as all volume bval <= lowbval. (default: --low_bval 5)')  # noqa
         # Clinica standard arguments (e.g. --n_procs)
-        clinica_opt = self._args.add_argument_group(PIPELINE_CATEGORIES['CLINICA_OPTIONAL'])
-        clinica_opt.add_argument("-tsv", "--subjects_sessions_tsv",
-                                 help='TSV file containing a list of subjects with their sessions.')
-        clinica_opt.add_argument("-wd", "--working_directory",
-                                 help='Temporary directory to store pipelines intermediate results')
-        clinica_opt.add_argument("-np", "--n_procs",
-                                 metavar=('N'), type=int,
-                                 help='Number of cores used to run in parallel')
+        self.add_clinica_standard_arguments()
 
     def run_command(self, args):
-        """
-        Run the DWIPreprocessingUsingT1 Pipeline from command line.
-        """
-        from tempfile import mkdtemp
-        from clinica.utils.stream import cprint
+        """Run the pipeline with defined args."""
+        from networkx import Graph
         from .dwi_preprocessing_using_t1_pipeline import DwiPreprocessingUsingT1
+        from clinica.utils.ux import print_end_pipeline, print_crash_files_and_exit
 
         pipeline = DwiPreprocessingUsingT1(
             bids_directory=self.absolute_path(args.bids_directory),
             caps_directory=self.absolute_path(args.caps_directory),
             tsv_file=self.absolute_path(args.subjects_sessions_tsv),
-            low_bval=args.low_bval
+            base_dir=self.absolute_path(args.working_directory),
+            low_bval=args.low_bval,
         )
 
-        if args.working_directory is None:
-            args.working_directory = mkdtemp()
-        pipeline.base_dir = self.absolute_path(args.working_directory)
-
         if args.n_procs:
-            pipeline.run(plugin='MultiProc',
-                         plugin_args={'n_procs': args.n_procs})
+            exec_pipeline = pipeline.run(plugin='MultiProc',
+                                         plugin_args={'n_procs': args.n_procs})
         else:
-            pipeline.run()
+            exec_pipeline = pipeline.run()
 
-        cprint("The " + self._name + " pipeline has completed. You can now delete the working directory (" + args.working_directory + ").")
+        if isinstance(exec_pipeline, Graph):
+            print_end_pipeline(self.name, pipeline.base_dir, pipeline.base_dir_was_specified)
+        else:
+            print_crash_files_and_exit(args.logname, pipeline.base_dir)

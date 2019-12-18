@@ -52,6 +52,7 @@ def test_run_Nifd2Bids(cmdopt):
     clean_folder(join(root, 'out', 'bids'), recreate=True)
     clean_folder(join(root, 'out', 'clinical_data'), recreate=False)
 
+
 def test_run_Oasis2Bids(cmdopt):
     from clinica.iotools.converters.oasis_to_bids.oasis_to_bids import OasisToBids
     from os.path import dirname, join, abspath
@@ -89,7 +90,7 @@ def test_run_Adni2Bids(cmdopt):
     clinical_data_directory = join(root, 'in', 'clinical_data_25-04-19')
     bids_directory = join(root, 'out', 'bids')
     subjects_list = join(root, 'in', 'subjects.txt')
-    modalities = ['T1', 'PET_FDG', 'PET_AV45', 'DWI', 'FLAIR', 'fMRI']
+    modalities = ['T1', 'PET_FDG', 'PET_AMYLOID', 'PET_TAU', 'DWI', 'FLAIR', 'fMRI']
     adni_to_bids.convert_images(dataset_directory,
                                 clinical_data_directory,
                                 bids_directory,
@@ -205,5 +206,25 @@ def test_run_Aibl2Bids(cmdopt):
                     shared_folder_name='bids')
     clean_folder(join(root, 'out', 'bids'), recreate=True)
 
-if __name__ == "__main__":
-    test_run_Nifd2Bids('yes !')
+
+def test_run_CenterNifti(cmdopt):
+    from clinica.iotools.utils.data_handling import center_all_nifti
+    from os.path import dirname, join, abspath
+
+    root = dirname(abspath(join(abspath(__file__), pardir)))
+    root = join(root, 'data', 'CenterNifti')
+
+    clean_folder(join(root, 'out', 'bids_centered'), recreate=True)
+
+    bids_dir = join(root, 'in', 'bids')
+    output_dir = join(root, 'out', 'bids_centered')
+
+    all_modalities = ['t1w', 'pet', 'dwi', 'magnitude', 'bold', 'flair', 't2', 'phasediff']
+
+    center_all_nifti(bids_dir, output_dir, all_modalities, center_all_files=True)
+    hashes_out = create_list_hashes(output_dir, extensions_to_keep=('.nii.gz', '.nii'))
+    hashes_ref = create_list_hashes(join(root, 'ref', 'bids_centered'), extensions_to_keep=('.nii.gz', '.nii'))
+
+    if hashes_out != hashes_ref:
+        raise RuntimeError('Hashes of nii* files are different between out and ref')
+    clean_folder(join(root, 'out', 'bids_centered'), recreate=False)

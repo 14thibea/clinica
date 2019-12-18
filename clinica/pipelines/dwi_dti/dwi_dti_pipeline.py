@@ -1,6 +1,7 @@
 # coding: utf8
 
 import clinica.pipelines.engine as cpe
+from nipype import config
 
 __author__ = ["Alexandre Routier", "Thomas Jacquemont"]
 __copyright__ = "Copyright 2016-2019 The Aramis Lab Team"
@@ -8,6 +9,11 @@ __credits__ = ["Nipype"]
 __license__ = "See LICENSE.txt file"
 __version__ = "0.1.0"
 __status__ = "Development"
+
+# Use hash instead of parameters for iterables folder names
+# Otherwise path will be too long and generate OSError
+cfg = dict(execution={'parameterize_dirs': False})
+config.update_config(cfg)
 
 
 class DwiDti(cpe.Pipeline):
@@ -34,8 +40,7 @@ class DwiDti(cpe.Pipeline):
         Returns:
             A list of (string) input fields name.
         """
-        input_list = ['preproc_dwi', 'preproc_bvec', 'preproc_bval', 'b0_mask']
-        return input_list
+        return ['preproc_dwi', 'preproc_bvec', 'preproc_bval', 'b0_mask']
 
     def get_output_fields(self):
         """Specify the list of possible outputs of this pipelines.
@@ -58,163 +63,70 @@ class DwiDti(cpe.Pipeline):
 
         import nipype.interfaces.utility as nutil
         import nipype.pipeline.engine as npe
-        import nipype.interfaces.io as nio
-
+        from clinica.utils.inputs import clinica_file_reader
+        from clinica.utils.exceptions import ClinicaCAPSError, ClinicaException
+        import clinica.utils.input_files as input_files
         from clinica.utils.stream import cprint
-        from clinica.lib.pycaps.caps_layout import CAPSLayout
 
-        caps_layout = CAPSLayout(self.caps_directory)
+        all_errors = []
 
-        cprint('Found %s image(s) in CAPS dataset' % len(self.subjects))
-        for i in range(len(self.subjects)):
-            # cprint('------- SUBJECT %s SESSION %s -------'
-            #        % (self.subjects[i], self.sessions[i]))
+        # b0 Mask
+        try:
+            b0_mask = clinica_file_reader(self.subjects,
+                                          self.sessions,
+                                          self.caps_directory,
+                                          input_files.DWI_PREPROC_BRAINMASK)
+        except ClinicaException as e:
+            all_errors.append(e)
 
-            # Check b-val file:
-            bval_file = caps_layout.get(
-                return_type='file',
-                dwi_preprocessing_file='preproc',
-                extensions=['bval'],
-                regex_search=True,
-                session=self.sessions[i].replace('ses-', ''),
-                subject=self.subjects[i].replace('sub-', '')
-            )
-            if len(bval_file) != 1:
-                raise IOError('Expected to find 1 bval file file for subject '
-                              + self.subjects[i]
-                              + ' and session '
-                              + self.sessions[i]
-                              + ' but found '
-                              + str(len(bval_file))
-                              + ' bval files instead.')
+        # DWI preprocessing NIfTI
+        try:
+            dwi_caps = clinica_file_reader(self.subjects,
+                                           self.sessions,
+                                           self.caps_directory,
+                                           input_files.DWI_PREPROC_NII)
+        except ClinicaException as e:
+            all_errors.append(e)
 
-            # Check b-vec file:
-            bvec_file = caps_layout.get(
-                return_type='file',
-                dwi_preprocessing_file='preproc',
-                extensions=['bvec'],
-                regex_search=True,
-                session=self.sessions[i].replace('ses-', ''),
-                subject=self.subjects[i].replace('sub-', '')
-            )
-            if len(bvec_file) != 1:
-                raise IOError('Expected to find 1 bvec file file for subject '
-                              + self.subjects[i]
-                              + ' and session '
-                              + self.sessions[i]
-                              + ' but found '
-                              + str(len(bvec_file))
-                              + ' bvec files instead.')
+        # bval files
+        try:
+            bval_files = clinica_file_reader(self.subjects,
+                                             self.sessions,
+                                             self.caps_directory,
+                                             input_files.DWI_PREPROC_BVAL)
+        except ClinicaException as e:
+            all_errors.append(e)
 
-            # Check DWI file:
-            dwi_file = caps_layout.get(
-                return_type='file',
-                dwi_preprocessing_file='preproc',
-                extensions=['.nii|.nii.gz'],
-                regex_search=True,
-                session=self.sessions[i].replace('ses-', ''),
-                subject=self.subjects[i].replace('sub-', '')
-            )
-            if len(dwi_file) != 1:
-                raise IOError('Expected to find 1 DWI NIfTI file for subject '
-                              + self.subjects[i]
-                              + ' and session '
-                              + self.sessions[i]
-                              + ' but found '
-                              + str(len(dwi_file))
-                              + ' DWI files instead.')
+        # bvec files
+        try:
+            bvec_files = clinica_file_reader(self.subjects,
+                                             self.sessions,
+                                             self.caps_directory,
+                                             input_files.DWI_PREPROC_BVEC)
+        except ClinicaException as e:
+            all_errors.append(e)
 
-            # Check B0 file:
-            b0_mask_file = caps_layout.get(
-                return_type='file',
-                dwi_preprocessing_file='brainmask',
-                extensions=['.nii|.nii.gz'],
-                regex_search=True,
-                session=self.sessions[i].replace('ses-', ''),
-                subject=self.subjects[i].replace('sub-', '')
-            )
-            if len(b0_mask_file) != 1:
-                raise IOError('Expected to find 1 b=0 brainmask for subject '
-                              + self.subjects[i]
-                              + ' and session '
-                              + self.sessions[i]
-                              + ' but found '
-                              + str(len(b0_mask_file))
-                              + ' brainmasks instead.')
+        if len(all_errors) > 0:
+            error_message = 'Clinica faced error(s) while trying to read files in your CAPS directory.\n'
+            for msg in all_errors:
+                error_message += str(msg)
+            raise ClinicaCAPSError(error_message)
 
-        # Iterables:
-        iterables_node = npe.Node(name="LoadingCLIArguments",
-                                  interface=nutil.IdentityInterface(
-                                      fields=['subject_id', 'session_id'],
-                                      mandatory_inputs=True)
-                                  )
-        iterables_node.iterables = [('subject_id', self.subjects),
-                                    ('session_id', self.sessions)]
-        iterables_node.synchronize = True
-
-        # B0 mask
-        b0_mask_caps_reader = npe.Node(
-            nio.DataGrabber(infields=['subject_id', 'session',
-                                      'subject_repeat', 'session_repeat'],
-                            outfields=['out_files']),
-            name='Read-CAPS_B0_Mask')
-        b0_mask_caps_reader.inputs.base_directory = self.caps_directory
-        b0_mask_caps_reader.inputs.template = 'subjects/%s/%s/dwi/preprocessing/%s_%s_*dwi_space-*_brainmask.nii.gz'  # noqa
-        b0_mask_caps_reader.inputs.sort_filelist = False
-
-        # DWI DataGrabber
-        dwi_caps_reader = npe.Node(
-            nio.DataGrabber(infields=['subject_id', 'session',
-                                      'subject_repeat', 'session_repeat'],
-                            outfields=['out_files']),
-            name='Read-CAPS_DWI')
-        dwi_caps_reader.inputs.base_directory = self.caps_directory
-        dwi_caps_reader.inputs.template = 'subjects/%s/%s/dwi/preprocessing/%s_%s_*dwi_space-*_preproc.nii.gz'  # noqa
-        dwi_caps_reader.inputs.sort_filelist = False
-
-        # Bval DataGrabber
-        bval_caps_reader = npe.Node(
-            nio.DataGrabber(infields=['subject_id', 'session',
-                                      'subject_repeat', 'session_repeat'],
-                            outfields=['out_files']),
-            name='Read-CAPS_BVAL')
-        bval_caps_reader.inputs.base_directory = self.caps_directory
-        bval_caps_reader.inputs.template = 'subjects/%s/%s/dwi/preprocessing/%s_%s_*dwi_space-*_preproc.bval'  # noqa
-        bval_caps_reader.inputs.sort_filelist = False
-
-        # Bvec dataGrabber
-        bvec_caps_reader = npe.Node(
-            nio.DataGrabber(infields=['subject_id', 'session',
-                                      'subject_repeat', 'session_repeat'],
-                            outfields=['out_files']),
-            name='Read-CAPS_BVEC')
-        bvec_caps_reader.inputs.base_directory = self.caps_directory
-        bvec_caps_reader.inputs.template = 'subjects/%s/%s/dwi/preprocessing/%s_%s_*dwi_space-*_preproc.bvec'  # noqa
-        bvec_caps_reader.inputs.sort_filelist = False
+        read_input_node = npe.Node(name="LoadingCLIArguments",
+                                   interface=nutil.IdentityInterface(
+                                       fields=self.get_input_fields(),
+                                       mandatory_inputs=True),
+                                   iterables=[('preproc_dwi', dwi_caps),
+                                              ('preproc_bvec', bvec_files),
+                                              ('preproc_bval', bval_files),
+                                              ('b0_mask', b0_mask)],
+                                   synchronize=True)
 
         self.connect([
-            # Iterables
-            (iterables_node, b0_mask_caps_reader, [('subject_id', 'subject_id'),  # noqa
-                                                   ('session_id', 'session'),  # noqa
-                                                   ('subject_id', 'subject_repeat'),  # noqa
-                                                   ('session_id', 'session_repeat')]),  # noqa
-            (iterables_node, dwi_caps_reader,  [('subject_id', 'subject_id'),  # noqa
-                                                ('session_id', 'session'),  # noqa
-                                                ('subject_id', 'subject_repeat'),  # noqa
-                                                ('session_id', 'session_repeat')]),  # noqa
-            (iterables_node, bval_caps_reader, [('subject_id', 'subject_id'),  # noqa
-                                                ('session_id', 'session'),  # noqa
-                                                ('subject_id', 'subject_repeat'),  # noqa
-                                                ('session_id', 'session_repeat')]),  # noqa
-            (iterables_node, bvec_caps_reader, [('subject_id', 'subject_id'),  # noqa
-                                                ('session_id', 'session'),  # noqa
-                                                ('subject_id', 'subject_repeat'),  # noqa
-                                                ('session_id', 'session_repeat')]),  # noqa
-            # Inputnode
-            (b0_mask_caps_reader, self.input_node, [('out_files', 'b0_mask')]),  # noqa
-            (dwi_caps_reader,     self.input_node, [('out_files', 'preproc_dwi')]),  # noqa
-            (bval_caps_reader,    self.input_node, [('out_files', 'preproc_bval')]),  # noqa
-            (bvec_caps_reader,    self.input_node, [('out_files', 'preproc_bvec')])  # noqa
+            (read_input_node, self.input_node, [('b0_mask', 'b0_mask')]),
+            (read_input_node, self.input_node, [('preproc_dwi', 'preproc_dwi')]),
+            (read_input_node, self.input_node, [('preproc_bval', 'preproc_bval')]),
+            (read_input_node, self.input_node, [('preproc_bvec', 'preproc_bvec')])
         ])
         cprint('The pipeline will last approximately 20 minutes per image.')
 
@@ -224,7 +136,7 @@ class DwiDti(cpe.Pipeline):
         import nipype.interfaces.utility as nutil
         import nipype.pipeline.engine as npe
         import nipype.interfaces.io as nio
-        from clinica.utils.io import fix_join
+        from clinica.utils.nipype import fix_join
 
         import clinica.pipelines.dwi_dti.dwi_dti_utils as utils
 

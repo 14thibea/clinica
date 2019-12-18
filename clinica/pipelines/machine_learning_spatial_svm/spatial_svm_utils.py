@@ -36,7 +36,7 @@ def spm_read(fname):
     img = nib.load(fname)
     pico = img.get_data()
     pico = np.array(pico, dtype='float32')
-    mask = (pico != pico)
+    mask = np.isnan(pico)
     pico[mask] = 0
     volu = img.header
 
@@ -536,12 +536,13 @@ def tensor_inverse(g):
     :return: inverse of the tensor
     """
     import clinica.pipelines.machine_learning_spatial_svm.spatial_svm_utils as utils
+    import numpy as np
 
     h = utils.tensor_transpose(utils.tensor_commatrix(g))
     detg = utils.tensor_determinant(g)
 
     h = h * (1 / (detg))
-    mask = (h != h)
+    mask = np.isnan(h)
     h[mask] = 0
     return h
 
@@ -599,9 +600,9 @@ def largest_eigenvalue_heat_3D_tensor2(g, h, epsilon):
 
     ginv = utils.tensor_scalar_product(detg, ginv)
     detg2 = detg[1:-1, 1:-1, 1:-1]  # 141*121*141
-    detg2[detg2 != detg2] = 0
-    detg[detg != detg] = 0
-    ginv[ginv != ginv] = 0
+    detg2[np.isnan(detg2)] = 0
+    detg[np.isnan(detg)] = 0
+    ginv[np.isnan(ginv)] = 0
 
     # initialisation
 
@@ -737,8 +738,6 @@ def heat_solver_tensor_3D_P1_grad_conj(f, g, t_final, h, t_step, CL_value, epsil
     b_h[:, 0, :] = b_h[:, 0, :] + (CL_value[1:-1, 0, 1:-1] * h)
     b_h[0, :, :] = b_h[0, :, :] + (CL_value[0, 1:-1, 1:-1] * h)
 
-    b_h = b_h
-
     print('##########computation b_H#############@ ')
 
     # inversion of the linear system
@@ -777,7 +776,6 @@ def heat_solver_tensor_2D_P1_grad_conj(f, g, t_final, h, t_step, CL_value, epsil
     b_h = utils.tensor_scalar_product((h * h), f[1:-1, 1:-1])
     b_h[:, 0] = b_h[:, 0] + utils.tensor_scalar_product(h, CL_value[1:-1, 0])
     b_h[0, :] = b_h[0, :] + utils.tensor_scalar_product(h, CL_value[0, 1:-1])
-    b_h = b_h  # what is the sense of doing this?
 
     # inversion of the linear system
     U_h = utils.heat_finite_elt_2D_tensor2(b_h, t_final, t_step, h, g)
@@ -822,7 +820,7 @@ def obtain_g_fisher_tensor(dartel_input, FWHM):
     # SCALE MAPS
     xxx = []
 
-    atlas = utils.atlas_decomposition(dartel_input[0])
+    atlas = utils.atlas_decomposition(dartel_input)
 
     for i in atlas:
 
@@ -879,7 +877,7 @@ def obtain_time_step_estimation(dartel_input, FWHM, g):
     import nibabel as nib
 
     # obtain voxel size with dartel_input
-    head = nib.load(dartel_input[0])
+    head = nib.load(dartel_input)
     head_ = head.header
     for i in range(len(head_['pixdim'])):
         if head_['pixdim'][i] > 0:
@@ -928,7 +926,7 @@ def heat_solver_equation(input_image, g, FWHM, t_step, dartel_input):
     import os
 
     # obtain voxel size with dartel_input
-    head = nib.load(dartel_input[0])
+    head = nib.load(dartel_input)
     head_ = head.header
     for i in range(len(head_['pixdim'])):
         if head_['pixdim'][i] > 0:

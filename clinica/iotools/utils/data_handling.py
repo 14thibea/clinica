@@ -33,7 +33,7 @@ def create_merge_file(bids_dir, out_tsv, caps_dir=None, tsv_file=None, pipelines
     import numpy as np
     import warnings
     from .pipeline_handling import InitException, DatasetError
-    from ...pipelines.engine import get_subject_session_list
+    from clinica.utils.participant import get_subject_session_list
 
     if caps_dir is not None:
         if not path.isdir(caps_dir):
@@ -542,3 +542,588 @@ def create_subs_sess_list(input_dir, output_dir,
                 subjs_sess_tsv.write(subj_id + '\t' + session_name + '\n')
 
     subjs_sess_tsv.close()
+
+
+def center_nifti_origin(input_image, output_image):
+
+    """
+
+    Put the origin of the coordinate system at the center of the image
+
+    Args:
+        input_image: path to the input image
+        output_image: path to the output image (where the result will be stored)
+
+    Returns:
+        path of the output image created
+    """
+
+    import nibabel as nib
+    import numpy as np
+    from colorama import Fore
+    from nibabel.spatialimages import ImageFileError
+    from os.path import isfile
+    import os
+
+    error_str = None
+    try:
+        img = nib.load(input_image)
+    except FileNotFoundError:
+        error_str = Fore.RED + '[Error] No such file ' + input_image + Fore.RESET
+    except ImageFileError:
+        error_str = Fore.RED + '[Error] File ' + input_image + ' could not be read.' + Fore.RESET
+
+    if not error_str:
+        canonical_img = nib.as_closest_canonical(img)
+        hd = canonical_img.header
+
+        qform = np.zeros((4, 4))
+        for i in range(1, 4):
+            qform[i - 1, i - 1] = hd['pixdim'][i]
+            qform[i - 1, 3] = -1.0 * hd['pixdim'][i] * hd['dim'][i] / 2.0
+        new_img = nib.Nifti1Image(canonical_img.get_data(caching='unchanged'), affine=qform, header=hd)
+
+        # Without deleting already-existing file, nib.save causes a severe bug on Linux system
+        if isfile(output_image):
+            os.remove(output_image)
+
+        nib.save(new_img, output_image)
+        if not isfile(output_image):
+            error_str = Fore.RED + '[Error] NIfTI file created but Clinica could not save it to ' \
+                        + output_image + '. Please check that the output folder has the correct permissions.' \
+                        + Fore.RESET
+    return output_image, error_str
+
+
+def center_all_nifti(bids_dir, output_dir, modality, center_all_files=False):
+    """
+    Center all the NIfTI images of the input BIDS folder into the empty output_dir specified in argument.
+    All the files from bids_dir are copied into output_dir, then all the NIfTI images we can found are replaced by their
+    centered version if their center if off the origin by more than 50 mm.
+
+    Args:
+        bids_dir: (str) path to bids directory
+        output_dir: (str) path to EMPTY output directory
+        modality: (list of str) modalities to convert
+        center_all_files: (bool) center only files that may cause problem for SPM if false. If true, center all NIfTI
+
+    Returns:
+        List of the centered files
+    """
+    from colorama import Fore
+    from clinica.utils.inputs import check_bids_folder
+    from clinica.utils.exceptions import ClinicaBIDSError
+    from os.path import join, basename
+    from glob import glob
+    from os import listdir
+    from os.path import isdir, isfile
+    from shutil import copy2, copytree
+
+    # output and input must be different, so that we do not mess with user's data
+    if bids_dir == output_dir:
+        raise ClinicaBIDSError(Fore.RED + '[Error] Input BIDS and output directories must be different' + Fore.RESET)
+
+    assert isinstance(modality, list), 'modality arg must be a list of str'
+
+    # check that input is a BIDS dir
+    check_bids_folder(bids_dir)
+
+    for f in listdir(bids_dir):
+        if isdir(join(bids_dir, f)) and not isdir(join(output_dir, f)):
+            copytree(join(bids_dir, f), join(output_dir, f))
+        elif isfile(join(bids_dir, f)) and not isfile(join(output_dir, f)):
+            copy2(join(bids_dir, f), output_dir)
+
+    pattern = join(output_dir, '**/*.nii*')
+    nifti_files = glob(pattern, recursive=True)
+
+    # Now filter this list by elements in modality list
+    #   For each file:
+    #       if any modality name (lowercase) is found in the basename of the file:
+    #           keep the file
+    nifti_files_filtered = [f for f in nifti_files
+                            if any(elem.lower() in basename(f).lower() for elem in modality)]
+
+    # Remove those who are centered
+    if not center_all_files:
+        nifti_files_filtered = [file for file in nifti_files_filtered if not is_centered(file)]
+
+    all_errors = []
+    for f in nifti_files_filtered:
+        print('Handling ' + f)
+        _, current_error = center_nifti_origin(f, f)
+        if current_error:
+            all_errors.append(current_error)
+    if len(all_errors) > 0:
+        final_error_msg = Fore.RED + '[Error] Clinica encoutered ' + str(len(all_errors)) \
+                          + ' error(s) while trying to center all NIfTI images.\n'
+        for error in all_errors:
+            final_error_msg += '\n' + error
+        raise RuntimeError(final_error_msg)
+    return nifti_files_filtered
+
+
+def are_far_appart(file1, file2, threshold=80):
+    """
+    Tells if 2 files have a center located at more than a threshold distance
+    Args:
+        file1: (str) path to the first nifti file
+        file2: (str) path to the second nifti file
+        threshold: threshold to consider whether 2 files are too far appart
+
+    Returns:
+        True if distance between `file1` and `file2` is greter than `threshold`, False otherwise.
+    """
+    from os.path import isfile
+    import numpy as np
+
+    assert isfile(file1)
+    assert isfile(file2)
+
+    center1 = get_world_coordinate_of_center(file1)
+    center2 = get_world_coordinate_of_center(file2)
+
+    return np.linalg.norm(center2 - center1, ord=2) > threshold
+
+
+def write_list_of_files(file_list, output_file):
+    """
+    Save `file_list` list of files into `output_file` text file.
+    Args:
+        file_list: (list of str) of path to files
+        output_file: (str) path to the output txt file
+
+    Returns:
+        output_file
+    """
+    from os.path import isfile
+
+    assert isinstance(file_list, list), 'First argument must be a list'
+    assert isinstance(output_file, str), 'Second argument must be a str'
+    if isfile(output_file):
+        return None
+
+    text_file = open(output_file, 'w+')
+    for created_file in file_list:
+        text_file.write(created_file + '\n')
+    text_file.close()
+    return output_file
+
+
+def check_relative_volume_location_in_world_coordinate_system(label_1, nifti_list1,
+                                                              label_2, nifti_list2,
+                                                              bids_dir,
+                                                              modality):
+    """
+    Check if the NIfTI file list nifti_list1 and nifti_list2 provided in argument are not too far apart (otherwise coreg
+    in SPM may fail. Norm between center of volumes of 2 files must be less than 80 mm.
+
+    Args:
+        label_1: label of the first nifti_list1 files (used in potential warning message)
+        nifti_list1: first set of files
+        label_2: label of the second nifti_list
+        nifti_list2: second set of files, must be same length as nifti_list1
+        bids_dir: bids directory (used in potential warning message)
+        modality: string that must be used in argument of: clinica iotools bids --modality MODALITY (used in potential
+                warning message)
+    Returns:
+        Nothing
+    """
+    import numpy as np
+    from colorama import Fore
+    from os.path import abspath, basename
+    from clinica.utils.stream import cprint
+    import sys
+
+    center_coordinate_1 = [get_world_coordinate_of_center(file) for file in nifti_list1]
+    center_coordinate_2 = [get_world_coordinate_of_center(file) for file in nifti_list2]
+
+    l2_norm = [np.linalg.norm(center_1 - center_2) for center_1, center_2 in zip(center_coordinate_1, center_coordinate_2)]
+    pairs_with_problems = [i for i, norm in enumerate(l2_norm) if norm > 80]
+
+    if len(pairs_with_problems) > 0:
+        warning_message = (Fore.YELLOW + '[Warning] It appears that ' + str(len(pairs_with_problems)) + ' pairs of files'
+                           + ' have an important relative offset. SPM coregistration has a high probability to fail '
+                           + 'on these files:\n\n')
+
+        # File column width : 3 spaces more than the longest string to display
+        file1_width = max(3 + len(label_1),
+                          3 + max(len(basename(file)) for file in [nifti_list1[k] for k in pairs_with_problems]))
+        file2_width = max(3 + len(label_2),
+                          3 + max(len(basename(file)) for file in [nifti_list2[k] for k in pairs_with_problems]))
+
+        norm_width = len('Relative distance')
+
+        warning_message += ('%-' + str(file1_width)
+                            + 's%-' + str(file2_width)
+                            + 's%-' + str(norm_width) + 's') % (label_1,
+                                                                label_2,
+                                                                'Relative distance')
+
+        warning_message += '\n' + '-' * (file1_width + file2_width + norm_width) + '\n'
+        for file1, file2, norm in zip([nifti_list1[k] for k in pairs_with_problems],
+                                      [nifti_list2[k] for k in pairs_with_problems],
+                                      [l2_norm[k] for k in pairs_with_problems]):
+            # Nice formatting as array
+            # % escape character
+            # - aligned to the left, with the size of the column
+            # s = string, f = float
+            # . for precision with float
+            # https://docs.python.org/2/library/stdtypes.html#string-formatting for more information
+            warning_message += ('%-' + str(file1_width)
+                                + 's%-' + str(file2_width)
+                                + 's%-' + str(norm_width) + '.2f\n') % (str(basename(file1)),
+                                                                        str(basename(file2)),
+                                                                        norm)
+        warning_message += '\nClinica provides a tool to counter this problem by replacing the center of the volume' \
+                           + ' at the origin of the world coordinates.\nUse the following command line to correct the '\
+                           + 'header of the faulty NIFTI volumes in a new folder:\n' + Fore.RESET \
+                           + Fore.BLUE + '\nclinica iotools center-nifti ' + abspath(bids_dir) + ' ' \
+                           + abspath(bids_dir) + '_centered --modality "' + modality + '"\n\n'  \
+                           + Fore.YELLOW + 'You will find more information on the command by typing ' + Fore.BLUE \
+                           + 'clinica iotools center-nifti' + Fore.YELLOW + ' in the console.\nDo you still want to ' \
+                           + 'launch the pipeline now?' + Fore.RESET
+        cprint(warning_message)
+        while True:
+            cprint('Your answer [yes/no]:')
+            answer = input()
+            if answer.lower() in ['yes', 'no']:
+                break
+            else:
+                cprint(Fore.RED + 'You must answer yes or no' + Fore.RESET)
+        if answer.lower() == 'no':
+            cprint(Fore.RED + 'Clinica will now exit...' + Fore.RESET)
+            sys.exit(0)
+
+
+def check_volume_location_in_world_coordinate_system(nifti_list, bids_dir, modality='t1w'):
+    """
+    Check if the NIfTI file list nifti_list provided in argument are aproximately centered around the origin of the
+    world coordinates. (Problem may arise with SPM segmentation
+
+    If yes, we warn the user of this problem, and propose him to exit clinica in order for him to run:
+        clinica iotools center-nifti ...
+    or to continue with the execution of the pipeline
+
+    Args:
+        nifti_list: (list of str) list of path to nifti files
+        bids_dir: (str) path to bids directory associated with this check (in order to propose directly the good
+            command line for center-nifti tool)
+        modality: (str) to propose directly the good command line option
+
+    Returns:
+        Nothing
+    """
+    from colorama import Fore
+    from clinica.utils.stream import cprint
+    from os.path import abspath, basename
+    import numpy as np
+    import sys
+
+    list_non_centered_files = [file for file in nifti_list if not is_centered(file)]
+    if len(list_non_centered_files) > 0:
+        centers = [get_world_coordinate_of_center(file) for file in list_non_centered_files]
+        l2_norm = [np.linalg.norm(center, ord=2) for center in centers]
+
+        # File column width : 3 spaces more than the longest string to display
+        file_width = 3 + max(len(basename(file)) for file in list_non_centered_files)
+        # Center column width (with a fixed minimum size) : 3 spaces more than the longest string to display
+        center_width = max(len('Coordinate of center') + 3,
+                           3 + max(len(str(center)) for center in centers))
+
+        warning_message = (Fore.YELLOW + '[Warning] It appears that ' + str(len(list_non_centered_files)) + ' files '
+                           + 'have a center way out of the origin of the world coordinate system. SPM has a high prob'
+                           + 'ability to fail on these files (for coregistration or segmentation):\n\n')
+        warning_message += ('%-' + str(file_width) + 's%-' + str(center_width) + 's%-s') % ('File',
+                                                                                            'Coordinate of center',
+                                                                                            'Distance to origin')
+        # 18 is the length of the string 'Distance to origin'
+        warning_message += '\n' + '-' * (file_width + center_width + 18) + '\n'
+        for file, center, l2 in zip(list_non_centered_files, centers, l2_norm):
+            # Nice formatting as array
+            # % escape character
+            # - aligned to the left, with the size of the column
+            # s = string, f = float
+            # . for precision with float
+            # https://docs.python.org/2/library/stdtypes.html#string-formatting for more information
+            warning_message += ('%-' + str(file_width) + 's%-' + str(center_width) + 's%-25.2f\n') % (basename(file),
+                                                                                                      str(center),
+                                                                                                      l2)
+
+        cmd_line = (Fore.BLUE
+                    + '\nclinica iotools center-nifti '
+                    + abspath(bids_dir) + ' '
+                    + abspath(bids_dir) + '_centered'
+                    + '--modality "' + modality + '"'
+                    + '\n\n' + Fore.YELLOW)
+
+        warning_message += ('\nIf you are trying to launch the t1-freesurfer pipeline, you can ignore this message '
+                            + 'if you do not want to run the pet-surface pipeline afterward.')
+
+        warning_message += '\nClinica provides a tool to counter this problem by replacing the center of the volume' \
+                           + ' at the origin of the world coordinates.\nUse the following command line to correct the '\
+                           + 'header of the faulty NIFTI volumes in a new folder:\n'\
+                           + cmd_line \
+                           + 'You will find more information on the command by typing ' + Fore.BLUE \
+                           + 'clinica iotools center-nifti' + Fore.YELLOW + ' in the console.\nDo you still want to '\
+                           + 'launch the pipeline now?' + Fore.RESET
+        cprint(warning_message)
+        while True:
+            cprint('Your answer [yes/no]:')
+            answer = input()
+            if answer.lower() in ['yes', 'no']:
+                break
+            else:
+                cprint(Fore.RED + 'You must answer yes or no' + Fore.RESET)
+        if answer.lower() == 'no':
+            cprint(Fore.RED + 'Clinica will now exit...' + Fore.RESET)
+            sys.exit(0)
+
+
+def is_centered(nii_volume, threshold_l2=50):
+    """
+    Tells if a NIfTI volume is centered on the origin of the world coordinate system.
+
+    SPM has troubles to segment files if the center of the volume is not close from the origin of the world coordinate
+    system. A series of experiment have been conducted: we take a volume whose center is on the origin of the world
+    coordinate system. We add an offset using coordinates of affine matrix [0, 3], [1, 3], [2, 3] (or by modifying the
+    header['srow_x'][3], header['srow_y'][3], header['srow_z'][3], this is strictly equivalent).
+
+    It has been determined that volumes were still segmented with SPM when the L2 distance between origin and center of
+    the volume did not exceed 100 mm. Above this distance, either the volume is either not segmented (SPM error), or the
+    produced segmentation is wrong (not the shape of a brain anymore)
+
+    Args:
+        nii_volume: path to NIfTI volume
+        threshold_l2: maximum distance between origin of the world coordinate system and the center of the volume to
+                    be considered centered. The threshold were SPM segmentation stops working is around 100 mm
+                    (it was determined empirically after several trials on a genrated dataset), so default value is 50
+                    mm in order to have a security margin, even when dealing with coregistred files afterward)
+
+    Returns:
+        True or False
+
+    """
+    import numpy as np
+    from os.path import basename
+
+    center = get_world_coordinate_of_center(nii_volume)
+
+    # Compare to the threshold and retun boolean
+    # if center is a np.nan, comparison will be False, and False will be returned
+    distance_from_origin = np.linalg.norm(center, ord=2)
+    # if not np.isnan(distance_from_origin):
+    #     print('\t' + basename(nii_volume) + ' has its center at {0:.2f} mm of the origin.'.format(distance_from_origin))
+    if distance_from_origin < threshold_l2:
+        return True
+    else:
+        # If center is a np.nan,
+        return False
+
+
+def get_world_coordinate_of_center(nii_volume):
+    """
+    Extract the world coordinates of the center of the image. Based on methods described
+    here : https://brainder.org/2012/09/23/the-nifti-file-format/
+
+    Args:
+        nii_volume: path to nii volume
+
+    Returns:
+
+    """
+    from os.path import isfile
+    import nibabel as nib
+    from colorama import Fore
+    import numpy as np
+
+    assert isinstance(nii_volume, str), 'input argument nii_volume must be a str'
+    assert isfile(nii_volume), 'input argument must be a path to a file'
+
+    try:
+        orig_nifti = nib.load(nii_volume)
+    except nib.filebasedimages.ImageFileError:
+        print(Fore.RED + '[Error] ' + nii_volume
+              + ' could not be read by nibabel. Is it a valid NIfTI file ?' + Fore.RESET)
+        return np.nan
+
+    head = orig_nifti.header
+
+    if isinstance(head, nib.freesurfer.mghformat.MGHHeader):
+        # If MGH volume
+        center_coordinates_world = vox_to_world_space_method_3_bis(head['dims'][0:3] / 2, head)
+    else:
+        # Standard NIfTI volume
+        center_coordinates = get_center_volume(head)
+
+        if head['qform_code'] > 0:
+            center_coordinates_world = vox_to_world_space_method_2(center_coordinates, head)
+        elif head['sform_code'] > 0:
+            center_coordinates_world = vox_to_world_space_method_3(center_coordinates, head)
+        elif head['sform_code'] == 0:
+            center_coordinates_world = vox_to_world_space_method_1(center_coordinates, head)
+        else:
+            center_coordinates_world = np.nan
+    return center_coordinates_world
+
+
+def get_center_volume(header):
+    """
+    Get the voxel coordinates of the center of the data, using header information
+    Args:
+        header: a nifti header
+
+    Returns:
+        Voxel coordinates of the center of the volume
+    """
+    import numpy as np
+
+    center_x = header['dim'][1] / 2
+    center_y = header['dim'][2] / 2
+    center_z = header['dim'][3] / 2
+    return np.array([center_x,
+                     center_y,
+                     center_z])
+
+
+def vox_to_world_space_method_1(coordinates_vol, header):
+    """
+    The Method 1 is for compatibility with analyze and is not supposed to be used as the main orientation method. But it
+    is used if sform_code = 0. The world coordinates are determined simply by scaling by the voxel size by their
+    dimension stored in pixdim. More information here: https://brainder.org/2012/09/23/the-nifti-file-format/
+    Args:
+        coordinates_vol: coordinate in the volume (raw data)
+        header: header object
+
+    Returns:
+        Coordinates in the world space
+    """
+    import numpy as np
+
+    return np.array(coordinates_vol) * np.array(header['pixdim'][1],
+                                                header['pixdim'][2],
+                                                header['pixdim'][3])
+
+
+def vox_to_world_space_method_2(coordinates_vol, header):
+    """
+    The Method 2 is used when short qform_code is larger than zero. To get the coordinates, we multiply a rotation
+    matrix (r_mat) by coordinates_vol, then perform hadamart with pixel dimension pixdim (like in method 1). Then we add
+    an offset (qoffset_x, qoffset_y, qoffset_z)
+
+    Args:
+        coordinates_vol: coordinate in the volume (raw data)
+        header: header object
+
+    Returns:
+        Coordinates in the world space
+    """
+    import numpy as np
+
+    def get_r_matrix(h):
+        """
+        Get rotation matrix, more information here: https://brainder.org/2012/09/23/the-nifti-file-format/
+        Args:
+            h: header
+
+        Returns:
+            Rotation matrix
+        """
+        b = h['quatern_b']
+        c = h['quatern_c']
+        d = h['quatern_d']
+        a = np.sqrt(1 - (b ** 2) - (c ** 2) - (d ** 2))
+        r = np.zeros((3, 3))
+        r[0, 0] = (a ** 2) + (b ** 2) - (c ** 2) - (d ** 2)
+        r[0, 1] = 2 * ((b * c) - (a * d))
+        r[0, 2] = 2 * ((b * d) + (a * c))
+        r[1, 0] = 2 * ((b * c) + (a * d))
+        r[1, 1] = (a ** 2) + (c ** 2) - (b ** 2) - (d ** 2)
+        r[1, 2] = 2 * ((c * d) - (a * b))
+        r[2, 0] = 2 * ((b * d) - (a * c))
+        r[2, 1] = 2 * ((b * d) - (a * c))
+        r[2, 2] = (a ** 2) + (d ** 2) - (b ** 2) - (c ** 2)
+        return r
+    i = coordinates_vol[0]
+    j = coordinates_vol[1]
+    k = coordinates_vol[2]
+    if header['qform_code'] > 0:
+        r_mat = get_r_matrix(header)
+    else:
+        # Should never be reached
+        raise ValueError('qform_code must be greater than 0 to use this method')
+    q = header['pixdim'][0]
+    if q not in [-1, 1]:
+        print('q was ' + str(q), ', now is 1')
+        q = 1
+    return np.dot(r_mat, np.array([i, j, q * k])) * np.array(header['pixdim'][1:4]) + np.array([header['qoffset_x'],
+                                                                                                header['qoffset_y'],
+                                                                                                header['qoffset_z']])
+
+
+def vox_to_world_space_method_3(coordinates_vol, header):
+    """
+    This method is used when sform_code is larger than zero. It relies on a full affine matrix, stored in the header in
+     the fields srow_[x,y,y], to map voxel to world coordinates.
+     When a nifti file is created with raw data and affine=..., this is this method that is used to decypher the
+     voxel-to-world correspondance.
+    Args:
+        coordinates_vol: coordinate in the volume (raw data)
+        header: header object
+
+    Returns:
+        Coordinates in the world space
+
+    """
+    import numpy as np
+
+    def get_aff_matrix(h):
+        """
+        Get affine transformation matrix, described here : https://brainder.org/2012/09/23/the-nifti-file-format/
+        Args:
+            h: header
+
+        Returns:
+            affine transformation matrix
+        """
+        mat = np.zeros((4, 4))
+        mat[0, 0] = h['srow_x'][0]
+        mat[0, 1] = h['srow_x'][1]
+        mat[0, 2] = h['srow_x'][2]
+        mat[0, 3] = h['srow_x'][3]
+        mat[1, 0] = h['srow_y'][0]
+        mat[1, 1] = h['srow_y'][1]
+        mat[1, 2] = h['srow_y'][2]
+        mat[1, 3] = h['srow_y'][3]
+        mat[2, 0] = h['srow_z'][0]
+        mat[2, 1] = h['srow_z'][1]
+        mat[2, 2] = h['srow_z'][2]
+        mat[2, 3] = h['srow_z'][3]
+        mat[3, 3] = 1
+        return mat
+
+    if header['sform_code'] > 0:
+        aff = get_aff_matrix(header)
+    else:
+        # Should never be reached
+        raise ValueError('sform_code has a value > 0, so method 3 cannot be used')
+
+    homogeneous_coord = np.concatenate((np.array(coordinates_vol), np.array([1])), axis=0)
+    return np.dot(aff, homogeneous_coord)[0:3]
+
+
+def vox_to_world_space_method_3_bis(coordinates_vol, header):
+    """
+    This method relies on the same technique as method 3, but for images created by FreeSurfer (MGHImage, MGHHeader)
+    Args:
+        coordinates_vol: coordinate in the volume (raw data)
+        header: nib.freesurfer.mghformat.MGHHeader object
+
+    Returns:
+        Coordinates in the world space
+    """
+    import numpy as np
+
+    affine_trensformation_matrix = header.get_affine()
+    homogeneous_coord = np.concatenate((np.array(coordinates_vol), np.array([1])), axis=0)
+    return np.dot(affine_trensformation_matrix, homogeneous_coord)[0:3]

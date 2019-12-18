@@ -9,54 +9,6 @@ import abc
 from nipype.pipeline.engine import Workflow
 
 
-def get_subject_session_list(input_dir, ss_file=None, is_bids_dir=True, use_session_tsv=False):
-    """Parses a BIDS or CAPS directory to get the subjects and sessions.
-
-    This function lists all the subjects and sessions based on the content of
-    the BIDS or CAPS directory or (if specified) on the provided
-    subject-sessions TSV file.
-
-    Args:
-        input_dir: A BIDS or CAPS directory path.
-        ss_file: A subjects-sessions file (.tsv format).
-        is_bids_dir: Indicates if input_dir is a BIDS or CAPS directory
-        use_session_tsv (boolean): Specify if the list uses the sessions listed in the sessions.tsv files
-
-    Returns:
-        subjects: A subjects list.
-        sessions: A sessions list.
-    """
-    import clinica.iotools.utils.data_handling as cdh
-    import pandas as pd
-    import tempfile
-    from time import time, strftime, localtime
-    import os
-
-    if not ss_file:
-        output_dir = tempfile.mkdtemp()
-        timestamp = strftime('%Y%m%d_%H%M%S', localtime(time()))
-        tsv_file = '%s_subjects_sessions_list.tsv' % timestamp
-        ss_file = os.path.join(output_dir, tsv_file)
-
-        cdh.create_subs_sess_list(
-            input_dir=input_dir,
-            output_dir=output_dir,
-            file_name=tsv_file,
-            is_bids_dir=is_bids_dir,
-            use_session_tsv=use_session_tsv)
-
-    ss_df = pd.io.parsers.read_csv(ss_file, sep='\t')
-    if 'participant_id' not in list(ss_df.columns.values):
-        raise Exception('No participant_id column in TSV file.')
-    if 'session_id' not in list(ss_df.columns.values):
-        raise Exception('No session_id column in TSV file.')
-    subjects = list(ss_df.participant_id)
-    sessions = list(ss_df.session_id)
-
-    # Remove potential whitespace in participant_id or session_id
-    return [ses.strip(' ') for ses in sessions], [sub.strip(' ') for sub in subjects]
-
-
 def postset(attribute, value):
     """Sets the attribute of an object after the execution.
 
@@ -98,7 +50,6 @@ class Pipeline(Workflow):
         is_built (bool): Informs if the pipelines has been built or not.
         parameters (dict): Parameters of the pipelines.
         info (dict): Information presented in the associated `info.json` file.
-        bids_layout (:obj:`BIDSLayout`): Object representing the BIDS directory.
         input_node (:obj:`npe.Node`): Identity interface connecting inputs.
         output_node (:obj:`npe.Node`): Identity interface connecting outputs.
         bids_directory (str): Directory used to read the data from, in BIDS.
@@ -113,18 +64,34 @@ class Pipeline(Workflow):
 
     __metaclass__ = abc.ABCMeta
 
-    def __init__(self, bids_directory=None, caps_directory=None, tsv_file=None, name=None):
-        """Inits a Pipeline object.
+    def __init__(self,
+                 bids_directory=None,
+                 caps_directory=None,
+                 tsv_file=None,
+                 overwrite_caps=False,
+                 base_dir=None,
+                 name=None):
+        """Init a Pipeline object.
 
         Args:
             bids_directory (optional): Path to a BIDS directory.
             caps_directory (optional): Path to a CAPS directory.
             tsv_file (optional): Path to a subjects-sessions `.tsv` file.
-            name (optional): A pipelines name.
+            overwrite_caps (optional): Boolean which specifies overwritten of output directory.
+            base_dir (optional): Working directory (attribute of Nipype::Workflow class).
+            name (optional): Pipeline name.
         """
         import inspect
         import os
+        from tempfile import mkdtemp
+        from colorama import Fore
+        from clinica.utils.inputs import check_caps_folder
+        from clinica.utils.inputs import check_bids_folder
+        from clinica.utils.exceptions import ClinicaException
+        from clinica.utils.participant import get_subject_session_list
+
         self._is_built = False
+        self._overwrite_caps = overwrite_caps
         self._bids_directory = bids_directory
         self._caps_directory = caps_directory
         self._verbosity = 'debug'
@@ -134,6 +101,13 @@ class Pipeline(Workflow):
             'info.json')
         self._info = {}
 
+        if base_dir is None:
+            self.base_dir = mkdtemp()
+            self._base_dir_was_specified = False
+        else:
+            self.base_dir = base_dir
+            self._base_dir_was_specified = True
+
         if name:
             self._name = name
         else:
@@ -142,33 +116,46 @@ class Pipeline(Workflow):
 
         if self._bids_directory is None:
             if self._caps_directory is None:
-                raise IOError('%s does not contain BIDS nor CAPS directory' %
-                              self._name)
-            if not os.path.isdir(self._caps_directory):
-                raise IOError('The CAPS parameter is not a folder (given path:%s)' %
-                              self._caps_directory)
+                raise RuntimeError(
+                    '%s[Error] The %s pipeline does not contain BIDS nor CAPS directory at the initialization.%s' %
+                    (Fore.RED, self._name, Fore.RESET))
 
-            self._sessions, self._subjects = get_subject_session_list(
-                input_dir=self._caps_directory,
-                ss_file=self._tsv_file,
-                is_bids_dir=False
-            )
+            check_caps_folder(self._caps_directory)
+            input_dir = self._caps_directory
+            is_bids_dir = True
         else:
-            if not os.path.isdir(self._bids_directory):
-                raise IOError('The BIDS parameter is not a folder (given path:%s)' %
-                              self._bids_directory)
-            self._sessions, self._subjects = get_subject_session_list(
-                input_dir=self._bids_directory,
-                ss_file=self._tsv_file,
-                is_bids_dir=True
-            )
+            check_bids_folder(self._bids_directory)
+            input_dir = self._bids_directory
+            is_bids_dir = True
+        self._sessions, self._subjects = get_subject_session_list(
+            input_dir,
+            tsv_file,
+            is_bids_dir,
+            False,
+            base_dir
+        )
 
         self.init_nodes()
 
-    def init_nodes(self):
-        """Inits the basic workflow and I/O nodes necessary before build.
+    @staticmethod
+    def get_processed_images(caps_directory, subjects, sessions):
+        """Extract processed image IDs in `caps_directory` based on `subjects`_`sessions`.
 
+        Todo:
+            [ ] Implement this static method in all pipelines
+            [ ] Make it abstract to force overload in future pipelines
         """
+        from clinica.utils.exceptions import ClinicaException
+        import datetime
+        from colorama import Fore
+        from clinica.utils.stream import cprint
+        now = datetime.datetime.now().strftime('%H:%M:%S')
+        cprint('\n%s[%s] Pipeline finished with errors.%s\n' % (Fore.RED, now, Fore.RESET))
+        cprint('%sCAPS outputs were not found for some image(s):%s' % (Fore.RED, Fore.RESET))
+        raise ClinicaException('Implementation on which image(s) failed will appear soon.')
+
+    def init_nodes(self):
+        """Init the basic workflow and I/O nodes necessary before build."""
         import nipype.interfaces.utility as nutil
         import nipype.pipeline.engine as npe
         if self.get_input_fields():
@@ -187,7 +174,7 @@ class Pipeline(Workflow):
         else:
             self._output_node = None
 
-        Workflow.__init__(self, self._name)
+        Workflow.__init__(self, self._name, self.base_dir)
         if self.input_node:
             self.add_nodes([self.input_node])
         if self.output_node:
@@ -221,7 +208,7 @@ class Pipeline(Workflow):
 
         This method first checks it has already been run. It then checks
         the pipelines dependencies and, in this order, builds the core nodes,
-        the input node and, finally, the ouput node of the Pipeline.
+        the input node and, finally, the output node of the Pipeline.
 
         Since this method returns the concerned object, it can be chained to
         any other method of the Pipeline class.
@@ -246,7 +233,7 @@ class Pipeline(Workflow):
         run it.
         It also checks whether there is enough space left on the disks, and if
         the number of threads to run in parallel is consistent with what is
-        possible on the CPU
+        possible on the CPU.
 
         Args:
             Similar to those of Workflow.run.
@@ -254,6 +241,12 @@ class Pipeline(Workflow):
         Returns:
             An execution graph (see Workflow.run).
         """
+        import shutil
+        from networkx import Graph, NetworkXError
+        from colorama import Fore
+        from clinica.utils.ux import print_failed_images
+        from clinica.utils.stream import cprint
+
         if not self.is_built:
             self.build()
         self.check_not_cross_sectional()
@@ -261,12 +254,36 @@ class Pipeline(Workflow):
             self.check_size()
             plugin_args = self.update_parallelize_info(plugin_args)
             plugin = 'MultiProc'
-        return Workflow.run(self, plugin, plugin_args, update_hash)
+        exec_graph = []
+        try:
+            exec_graph = Workflow.run(self, plugin, plugin_args, update_hash)
+            if not self.base_dir_was_specified:
+                shutil.rmtree(self.base_dir)
+
+        except RuntimeError as e:
+            # Check that it is a Nipype error
+            if 'Workflow did not execute cleanly. Check log for details' in str(e):
+                input_ids = [p_id + '_' + s_id
+                             for p_id, s_id in zip(self.subjects, self.sessions)]
+                output_ids = self.get_processed_images(
+                    caps_directory=self.caps_directory,
+                    subjects=self.subjects,
+                    sessions=self.sessions
+                )
+                missing_ids = list(set(input_ids) - set(output_ids))
+                print_failed_images(self.name, missing_ids)
+            else:
+                raise e
+        except NetworkXError:
+            cprint('%sEither all the images were already run by the pipeline or no image was found '
+                   'to run the pipeline.\n%s' % (Fore.BLUE, Fore.RESET))
+            exec_graph = Graph()
+        return exec_graph
 
     def load_info(self):
         """Loads the associated info.json file.
 
-        Todos:
+        Todo:
             - [ ] Raise an appropriate exception when the info file can't open
 
         Raises:
@@ -288,7 +305,7 @@ class Pipeline(Workflow):
         exception if a program in the list does not exist or if environment
         variables are not properly defined.
 
-        Todos:
+        Todo:
             - [ ] MATLAB toolbox dependency checking
             - [x] check MATLAB
             - [ ] Clinica pipelines dependency checkings
@@ -324,7 +341,7 @@ class Pipeline(Workflow):
         # Dependencies checking
         for d in self.info['dependencies']:
             if d['type'] == 'software':
-                check_software[d['name']]()
+                check_software[d['name']](d['version'])
             elif d['type'] == 'binary':
                 check_binary(d['name'])
             elif d['type'] == 'toolbox':
@@ -332,7 +349,7 @@ class Pipeline(Workflow):
             elif d['type'] == 'pipeline':
                 pass
             else:
-                raise Exception("Unknown dependency type: '%s'." % d['type'])
+                raise Exception("Pipeline.check_dependencies() Unknown dependency type: '%s'." % d['type'])
 
         self.check_custom_dependencies()
 
@@ -342,7 +359,7 @@ class Pipeline(Workflow):
         """ Checks if the pipeline has enough space on the disk for both
         working directory and caps directory
 
-        Author : Arnaud Marcoux"""
+        Author: Arnaud Marcoux"""
         from os import statvfs
         from os.path import dirname, abspath, join
         from pandas import read_csv
@@ -369,7 +386,7 @@ class Pipeline(Workflow):
             symbols can be either "customary", "customary_ext", "iec" or "iec_ext",
             see: http://goo.gl/kTQMs
 
-            License :
+            License:
             Bytes-to-human / human-to-bytes converter.
             Based on: http://goo.gl/kTQMs
             Working with Python 2.x and 3.x.
@@ -395,7 +412,7 @@ class Pipeline(Workflow):
             set and return the corresponding bytes as an integer.
             When unable to recognize the format ValueError is raised.
 
-            License :
+            License:
             Bytes-to-human / human-to-bytes converter.
             Based on: http://goo.gl/kTQMs
             Working with Python 2.x and 3.x.
@@ -433,12 +450,7 @@ class Pipeline(Workflow):
         except FileNotFoundError:
             # CAPS folder may not exist yet
             caps_stat = statvfs(dirname(self.caps_directory))
-        try:
-            wd_stat = statvfs(dirname(self.parameters['wd']))
-        except (KeyError, FileNotFoundError):
-            # Not all pipelines has a 'wd' parameter
-            # todo : maybe more relevant to always take base_dir ?
-            wd_stat = statvfs(dirname(self.base_dir))
+        wd_stat = statvfs(dirname(self.base_dir))
 
         # Estimate space left on partition/disk/whatever caps and wd is located
         free_space_caps = caps_stat.f_bavail * caps_stat.f_frsize
@@ -476,7 +488,7 @@ class Pipeline(Workflow):
             if error != '':
                 cprint(Fore.RED + '[SpaceError] ' + error + Fore.RESET)
                 while True:
-                    cprint('Do you still want to run the pipeline ? (yes/no): '
+                    cprint('Do you still want to run the pipeline? (yes/no): '
                            + ' In ' + str(timeout) + ' sec the pipeline will start if you do not answer.')
                     stdin_answer, __, ___ = select.select([sys.stdin], [], [], timeout)
                     if stdin_answer:
@@ -504,7 +516,7 @@ class Pipeline(Workflow):
         given the number of CPUs of the machine in which clinica is running.
         We force the use of plugin MultiProc
 
-        Author : Arnaud Marcoux"""
+        Author: Arnaud Marcoux"""
         from clinica.utils.stream import cprint
         from multiprocessing import cpu_count
         from colorama import Fore
@@ -513,7 +525,7 @@ class Pipeline(Workflow):
 
         # count number of CPUs
         n_cpu = cpu_count()
-        # timeout value : max time allowed to decide how many thread
+        # timeout value: max time allowed to decide how many thread
         # to run in parallel (sec)
         timeout = 15
 
@@ -526,17 +538,17 @@ class Pipeline(Workflow):
             # so we need a try / except block
             n_thread_cmdline = plugin_args['n_procs']
             if n_thread_cmdline > n_cpu:
-                cprint(Fore.RED + '[Warning] You are trying to run clinica '
+                cprint(Fore.YELLOW + '[Warning] You are trying to run clinica '
                        + 'with a number of threads (' + str(n_thread_cmdline)
                        + ') superior to your number of CPUs (' + str(n_cpu)
                        + ').' + Fore.RESET)
                 ask_user = True
         except TypeError:
-            cprint(Fore.RED + '[Warning] You did not specify the number of '
+            cprint(Fore.YELLOW + '\n[Warning] You did not specify the number of '
                    + 'threads to run in parallel (--n_procs argument).'
                    + Fore.RESET)
-            cprint(Fore.RED + 'Computation time can be shorten as you have '
-                   + str(n_cpu) + ' CPUs on this computer. We recommand using '
+            cprint(Fore.YELLOW + 'Computation time can be shorten as you have '
+                   + str(n_cpu) + ' CPUs on this computer. We recommend using '
                    + str(n_cpu - 1) + ' threads.\n' + Fore.RESET)
             ask_user = True
 
@@ -545,7 +557,7 @@ class Pipeline(Workflow):
                 # While True allows to ask indefinitely until
                 # user gives a answer that has the correct format
                 # (here, positive integer) or timeout
-                cprint('How many threads do you want to use ? If you do not '
+                cprint('How many threads do you want to use? If you do not '
                        + 'answer within ' + str(timeout)
                        + ' sec, default value of ' + str(n_cpu - 1)
                        + ' will be taken.')
@@ -590,13 +602,16 @@ class Pipeline(Workflow):
             This function converts a cross-sectional-bids dataset into a
             longitudinal clinica-compliant dataset
 
-            :param bids_in: cross sectional bids dataset you want to convert
-            :param bids_out: converted longitudinal bids dataset
-            :param cross_subjects: list of subjects in cross sectional form
-            (they need some adjustment)
-            :param long_subjects: list of subjects in longitudinal form (they
-            just need to be copied)
-            :return: nothing
+            Args:
+                bids_in: cross sectional bids dataset you want to convert
+                bids_out: converted longitudinal bids dataset
+                cross_subjects: list of subjects in cross sectional form
+                (they need some adjustment)
+                long_subjects: list of subjects in longitudinal form (they
+                just need to be copied)
+
+            Returns:
+                nothing
             """
             from os.path import exists, isfile
             from os import mkdir
@@ -606,19 +621,20 @@ class Pipeline(Workflow):
                 """
                 Use this function to transform a cross sectional filename into
                 a longitudinal one.
-                Examples :
+                Examples:
                 sub-ADNI001_scans.tsv -> sub-ADNI001_ses-M00_scans.tsv
                 sub-023a_ses-M12_T1w.nii.gz -> sub-023a_ses-M12_T1w.nii.gz (no
                     modification done if filename already has a session)
 
+                Args:
+                    f: filename
 
-                :param f: filename
-                :return: filename with '_ses-M00_ added just after
-                participant_id
+                Returns:
+                    filename with '_ses-M00_ added just after participant_id
                 """
                 import re
                 # If filename contains ses-..., returns the original filename
-                # Regex explication :
+                # Regex explication:
                 # ^ start of string
                 # ([a-zA-Z0-9]*) matches any number of characters from a to z,
                 #       A to Z, 0 to 9, and store it in group(1)
@@ -638,9 +654,12 @@ class Pipeline(Workflow):
                 the filename of the copied files if they match the regex
                 template described in add_ses() function
 
-                :param src: path to the file that needs to be copied
-                :param dst: original destination for the copied file
-                :return: copy2 with modified filename
+                Args:
+                    src: path to the file that needs to be copied
+                    dst: original destination for the copied file
+
+                Returns:
+                    copy2 with modified filename
                 """
                 from shutil import copy2
                 from os.path import join, dirname, basename
@@ -652,7 +671,7 @@ class Pipeline(Workflow):
                 # Create the output folder if it does not exists yet
                 mkdir(bids_out)
 
-            # First part of the algorithm : deal with subjects that does not
+            # First part of the algorithm: deal with subjects that does not
             # have longitudinal (session) information
             for subj in cross_subjects:
                 # Get list of of files/folders to copy. Remove hidden element
@@ -685,7 +704,7 @@ class Pipeline(Workflow):
                             copy2(path_el,
                                   join(bids_out, subj, 'ses-M00',
                                        new_filename_wo_ses))
-            # Second part of the algorithm : deal with subjects that do not
+            # Second part of the algorithm: deal with subjects that do not
             # have the problem. We only xopy the content of the folder, and no
             # filename needs to be changed
             for su in long_subjects:
@@ -697,7 +716,7 @@ class Pipeline(Workflow):
                 for el in to_copy:
                     path_el = join(bids_in, su, el)
                     if not exists(join(bids_out, su, el)):
-                        # 2 possible cases : element to pcopy is a folder or a
+                        # 2 possible cases: element to pcopy is a folder or a
                         # file
                         if isdir(path_el):
                             copytree(path_el,
@@ -707,7 +726,7 @@ class Pipeline(Workflow):
                                   join(bids_out, su))
         if self.bids_directory is not None:
             bids_dir = abspath(self.bids_directory)
-            # Extract all subjects in BIDS directory : element must be a folder and
+            # Extract all subjects in BIDS directory: element must be a folder and
             # a name starting with 'sub-'
             all_subs = [f for f in listdir(bids_dir)
                         if isdir(join(bids_dir, f)) and f.startswith('sub-')]
@@ -741,7 +760,7 @@ class Pipeline(Workflow):
 
                 while True:
                     cprint('Do you want to proceed to the conversion in an other '
-                           + 'folder ? (your original BIDS folder will not be'
+                           + 'folder? (your original BIDS folder will not be'
                            + ' modified, the folder ' + proposed_bids
                            + ' will be created) (yes/no): ')
                     answer = input('')
@@ -761,14 +780,20 @@ class Pipeline(Workflow):
                                             long_subj)
                     cprint(
                         Fore.GREEN + 'Conversion succeeded. Your clinica-compliant'
-                        + ' dataset is located here : ' + proposed_bids
+                        + ' dataset is located here: ' + proposed_bids
                         + Fore.RESET)
+
+    @property
+    def base_dir_was_specified(self): return self._base_dir_was_specified
 
     @property
     def is_built(self): return self._is_built
 
     @is_built.setter
     def is_built(self, value): self._is_built = value
+
+    @property
+    def overwrite_caps(self): return self._overwrite_caps
 
     @property
     def parameters(self): return self._parameters
@@ -787,11 +812,6 @@ class Pipeline(Workflow):
     def info(self, value): self._info = value
 
     @property
-    def bids_layout(self):
-        from bids.grabbids import BIDSLayout
-        return BIDSLayout(self.bids_directory)
-
-    @property
     def input_node(self): return self._input_node
 
     @property
@@ -806,8 +826,18 @@ class Pipeline(Workflow):
     @property
     def subjects(self): return self._subjects
 
+    @subjects.setter
+    def subjects(self, value):
+        self._subjects = value
+        self.is_built = False
+
     @property
     def sessions(self): return self._sessions
+
+    @sessions.setter
+    def sessions(self, value):
+        self._sessions = value
+        self.is_built = False
 
     @property
     def tsv_file(self): return self._tsv_file

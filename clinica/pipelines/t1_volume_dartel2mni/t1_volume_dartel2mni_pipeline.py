@@ -17,21 +17,28 @@ class T1VolumeDartel2MNI(cpe.Pipeline):
 
     Args:
         input_dir: A BIDS directory.
-        output_dir: An empty output directory where CAPS structured data will
-        be written.  subjects_sessions_list: The Subjects-Sessions list file
-        (in .tsv format).
+        output_dir: An empty output directory where CAPS structured data will be written.
+        subjects_sessions_list: The Subjects-Sessions list file (in .tsv format).
 
     Returns:
         A clinica pipeline object containing the T1VolumeDartel2MNI pipeline.
-
-    Raises:
-
-
     """
-
-    def __init__(self, bids_directory=None, caps_directory=None, tsv_file=None, name=None, group_id='default'):
+    def __init__(self,
+                 bids_directory=None,
+                 caps_directory=None,
+                 tsv_file=None,
+                 base_dir=None,
+                 name=None,
+                 group_id='default'):
         import os
-        super(T1VolumeDartel2MNI, self).__init__(bids_directory, caps_directory, tsv_file, name)
+        from clinica.utils.exceptions import ClinicaException
+
+        super(T1VolumeDartel2MNI, self).__init__(
+            bids_directory=bids_directory,
+            caps_directory=caps_directory,
+            base_dir=base_dir,
+            tsv_file=tsv_file,
+            name=name)
 
         if not group_id.isalnum():
             raise ValueError('Not valid group_id value. It must be composed only by letters and/or numbers')
@@ -40,8 +47,8 @@ class T1VolumeDartel2MNI(cpe.Pipeline):
         # Check that group already exists
         if not os.path.exists(os.path.join(os.path.abspath(caps_directory), 'groups', 'group-' + group_id)):
             error_message = group_id \
-                            + ' does not exists, please choose an other one (or maybe you need to run t1-spm-dartel).' \
-                            + '\nGroups that already exists in your CAPS directory are : \n'
+                            + ' does not exists, please choose another one (or maybe you need to run t1-volume-create-dartel).' \
+                            + '\nGroups that already exist in your CAPS directory are: \n'
             list_groups = os.listdir(os.path.join(os.path.abspath(caps_directory), 'groups'))
             is_empty = True
             for e in list_groups:
@@ -50,15 +57,15 @@ class T1VolumeDartel2MNI(cpe.Pipeline):
                     is_empty = False
             if is_empty is True:
                 error_message += 'NO GROUP FOUND'
-            raise ValueError(error_message)
+            raise ClinicaException(error_message)
 
         # Default parameters
         self._parameters = {'tissues': [1, 2, 3],
                             'bounding_box': None,
                             'voxel_size': None,
                             'modulation': True,
-                            'fwhm': [8],
-                            'atlas_list': ['AAL2', 'LPBA40', 'Neuromorphometrics', 'AICHA', 'Hammers']
+                            'fwhm': [8]
+                            # 'atlas_list': ['AAL2', 'LPBA40', 'Neuromorphometrics', 'AICHA', 'Hammers']
                             }
 
     def check_custom_dependencies(self):
@@ -73,7 +80,7 @@ class T1VolumeDartel2MNI(cpe.Pipeline):
             A list of (string) input fields name.
         """
 
-        return ['apply_to_files', 'flowfield_files', 'template_file']
+        return ['native_segmentations', 'flowfield_files', 'template_file']
 
     def get_output_fields(self):
         """Specify the list of possible outputs of this pipelines.
@@ -90,6 +97,10 @@ class T1VolumeDartel2MNI(cpe.Pipeline):
 
         import nipype.pipeline.engine as npe
         import nipype.interfaces.io as nio
+        import nipype.interfaces.utility as nutil
+        from clinica.utils.inputs import clinica_file_reader, clinica_group_reader
+        from clinica.utils.exceptions import ClinicaCAPSError, ClinicaException
+        from colorama import Fore
 
         tissue_names = {1: 'graymatter',
                         2: 'whitematter',
@@ -99,55 +110,75 @@ class T1VolumeDartel2MNI(cpe.Pipeline):
                         6: 'background'
                         }
 
-        # Segmented Tissues DataGrabber
-        # ==============================
-        tissues_caps_reader = npe.MapNode(nio.DataGrabber(infields=['subject_id', 'session',
-                                                                    'subject_repeat', 'session_repeat',
-                                                                    'tissue'],
-                                                          outfields=['out_files']),
-                                          name="tissues_caps_reader",
-                                          iterfield=['subject_id', 'session',
-                                                     'subject_repeat', 'session_repeat'])
-        tissues_caps_reader.inputs.base_directory = self.caps_directory
-        tissues_caps_reader.inputs.template = 'subjects/%s/%s/t1/spm/segmentation/native_space/%s_%s_T1w_segm-%s_probability.nii*'
-        tissues_caps_reader.inputs.subject_id = self.subjects
-        tissues_caps_reader.inputs.session = self.sessions
-        tissues_caps_reader.inputs.tissue = [tissue_names[t] for t in self.parameters['tissues']]
-        tissues_caps_reader.inputs.subject_repeat = self.subjects
-        tissues_caps_reader.inputs.session_repeat = self.sessions
-        tissues_caps_reader.inputs.sort_filelist = False
+        all_errors = []
+        read_input_node = npe.Node(name="LoadingCLIArguments",
+                                   interface=nutil.IdentityInterface(
+                                       fields=self.get_input_fields(),
+                                       mandatory_inputs=True))
 
-        # Flow Fields DataGrabber
-        # ==============================
-        flowfields_caps_reader = npe.Node(nio.DataGrabber(infields=['subject_id', 'session',
-                                                                    'subject_repeat', 'session_repeat'],
-                                                          outfields=['out_files']),
-                                          name="flowfields_caps_reader")
-        flowfields_caps_reader.inputs.base_directory = self.caps_directory
-        flowfields_caps_reader.inputs.template = 'subjects/%s/%s/t1/spm/dartel/group-' + self._group_id \
-                                                 + '/%s_%s_T1w_target-' + self._group_id \
-                                                 + '_transformation-forward_deformation.nii*'
-        flowfields_caps_reader.inputs.subject_id = self.subjects
-        flowfields_caps_reader.inputs.session = self.sessions
-        flowfields_caps_reader.inputs.subject_repeat = self.subjects
-        flowfields_caps_reader.inputs.session_repeat = self.sessions
-        flowfields_caps_reader.inputs.sort_filelist = False
+        # Segmented Tissues
+        # =================
+        tissues_input = []
+        for tissue_number in self.parameters['tissues']:
+            try:
+                current_file = clinica_file_reader(self.subjects,
+                                                   self.sessions,
+                                                   self.caps_directory,
+                                                   {'pattern': 't1/spm/segmentation/native_space/*_*_T1w_segm-'
+                                                               + tissue_names[tissue_number] + '_probability.nii*',
+                                                    'description': 'SPM based probability of ' + tissue_names[tissue_number]
+                                                                   + ' based on T1w-MRI in native space',
+                                                    'needed_pipeline': 't1-volume-tissue-segmentation'})
+                tissues_input.append(current_file)
+            except ClinicaException as e:
+                all_errors.append(e)
+        # Tissues_input has a length of len(self.parameters['mask_tissues']). Each of these elements has a size of
+        # len(self.subjects). We want the opposite : a list of size len(self.subjects) whose elements have a size of
+        # len(self.parameters['mask_tissues']. The trick is to iter on elements with zip(*mylist)
+        tissues_input_rearranged = []
+        for subject_tissue_list in zip(*tissues_input):
+            tissues_input_rearranged.append(subject_tissue_list)
 
-        # Dartel Template DataGrabber
-        # ===========================
-        template_caps_reader = npe.Node(nio.DataGrabber(infields=['group_id', 'group_id_repeat'],
-                                                        outfields=['out_files']),
-                                        name="template_caps_reader")
-        template_caps_reader.inputs.base_directory = self.caps_directory
-        template_caps_reader.inputs.template = 'groups/group-%s/t1/group-%s_template.nii*'
-        template_caps_reader.inputs.group_id = self._group_id
-        template_caps_reader.inputs.group_id_repeat = self._group_id
-        template_caps_reader.inputs.sort_filelist = False
+        read_input_node.inputs.native_segmentations = tissues_input_rearranged
+
+        # Flow Fields
+        # ===========
+        try:
+            read_input_node.inputs.flowfield_files = clinica_file_reader(self.subjects,
+                                                                         self.sessions,
+                                                                         self.caps_directory,
+                                                                         {'pattern': 't1/spm/dartel/group-' + self._group_id
+                                                                                     + '/sub-*_ses-*_T1w_target-' + self._group_id
+                                                                                     + '_transformation-forward_deformation.nii*',
+                                                                          'description': 'flowfield files (forward transformation) from native space to '
+                                                                                         + self._group_id + ' space',
+                                                                          'needed_pipeline': 't1-volume-create-dartel'})
+        except ClinicaException as e:
+            all_errors.append(e)
+
+        # Dartel Template
+        # ================
+        try:
+            read_input_node.inputs.template_file = clinica_group_reader(self.caps_directory,
+                                                                        {'pattern': 'group-' + self._group_id
+                                                                                    + '/t1/group-' + self._group_id
+                                                                                    + '_template.nii*',
+                                                                         'description': 'T1w template file of group '
+                                                                                        + self._group_id,
+                                                                         'needed_pipeline': 't1-volume or t1-volume-create-dartel'})
+        except ClinicaException as e:
+            all_errors.append(e)
+
+        if len(all_errors) > 0:
+            error_message = 'Clinica faced error(s) while trying to read files in your CAPS/BIDS directories.\n'
+            for msg in all_errors:
+                error_message += str(msg)
+            raise ClinicaCAPSError(error_message)
 
         self.connect([
-            (tissues_caps_reader, self.input_node, [('out_files', 'apply_to_files')]),
-            (flowfields_caps_reader, self.input_node, [('out_files', 'flowfield_files')]),
-            (template_caps_reader, self.input_node, [('out_files', 'template_file')])
+            (read_input_node, self.input_node, [('native_segmentations', 'native_segmentations')]),
+            (read_input_node, self.input_node, [('flowfield_files', 'flowfield_files')]),
+            (read_input_node, self.input_node, [('template_file', 'template_file')])
         ])
 
     def build_output_node(self):
@@ -157,7 +188,7 @@ class T1VolumeDartel2MNI(cpe.Pipeline):
         import nipype.pipeline.engine as npe
         import nipype.interfaces.io as nio
         import re
-        from clinica.utils.io import zip_nii
+        from clinica.utils.filemanip import zip_nii
 
         # Writing normalized images (and smoothed) into CAPS
         # ==================================================
@@ -184,85 +215,24 @@ class T1VolumeDartel2MNI(cpe.Pipeline):
              r'\1/\3_\2_probability\4'),
             (r'trait_added', r'')
         ]
-
-        # Writing atlas statistics into CAPS
-        # ==================================
-        write_atlas_node = npe.MapNode(name='write_atlas_node',
-                                            iterfield=['container', 'atlas_statistics'],
-                                            interface=nio.DataSink(infields=['atlas_statistics']))
-        write_atlas_node.inputs.base_directory = self.caps_directory
-        write_atlas_node.inputs.parameterization = False
-        write_atlas_node.inputs.container = ['subjects/' + self.subjects[i] + '/' + self.sessions[i] +
-                                             '/t1/spm/dartel/group-' + self._group_id + '/atlas_statistics'
-                                             for i in range(len(self.subjects))]
-        write_atlas_node.inputs.regexp_substitutions = [
-            (r'(.*atlas_statistics)/atlas_statistics/mwc1(sub-.*)(_space-.*_map-graymatter_statistics\.tsv)$',
-             r'\1/\2\3'),
-            (r'(.*atlas_statistics)/atlas_statistics/(m?w)?(sub-.*_T1w).*(_space-.*_map-graymatter_statistics).*(\.tsv)$',
-             r'\1/\3\4\5'),
-            (r'trait_added', r'')
-        ]
-
         self.connect([
             (self.output_node, write_normalized_node, [(('normalized_files', zip_nii, True), 'normalized_files'),
                                                        (('smoothed_normalized_files', zip_nii, True),
-                                                        'smoothed_normalized_files')]),
-            (self.output_node, write_atlas_node, [('atlas_statistics', 'atlas_statistics')])
+                                                        'smoothed_normalized_files')])
         ])
 
     def build_core_nodes(self):
         """Build and connect the core nodes of the pipelines.
         """
-
-        import os
         import nipype.interfaces.spm as spm
-        import nipype.interfaces.matlab as mlab
         import nipype.pipeline.engine as npe
         import nipype.interfaces.utility as nutil
-        from clinica.utils.io import unzip_nii
-        from clinica.pipelines.t1_volume_dartel2mni.t1_volume_dartel2mni_utils import prepare_flowfields, join_smoothed_files, atlas_statistics, select_gm_images
+        from clinica.utils.filemanip import unzip_nii
+        from ..t1_volume_dartel2mni import t1_volume_dartel2mni_utils as dartel2mni_utils
+        from clinica.utils.spm import get_tpm
 
-        spm_home = os.getenv("SPM_HOME")
-        mlab_home = os.getenv("MATLABCMD")
-        mlab.MatlabCommand.set_default_matlab_cmd(mlab_home)
-        mlab.MatlabCommand.set_default_paths(spm_home)
-
-        if 'SPMSTANDALONE_HOME' in os.environ:
-            if 'MCR_HOME' in os.environ:
-                matlab_cmd = os.path.join(os.environ['SPMSTANDALONE_HOME'],
-                                          'run_spm12.sh') \
-                             + ' ' + os.environ['MCR_HOME'] \
-                             + ' script'
-                spm.SPMCommand.set_mlab_paths(matlab_cmd=matlab_cmd, use_mcr=True)
-                version = spm.SPMCommand().version
-            else:
-                raise EnvironmentError('MCR_HOME variable not in environnement. Althought, '
-                                       + 'SPMSTANDALONE_HOME has been found')
-        else:
-            version = spm.Info.getinfo()
-
-        if version:
-            if isinstance(version, dict):
-                spm_path = version['path']
-                if version['name'] == 'SPM8':
-                    print('You are using SPM version 8. The recommended version to use with Clinica is SPM 12. '
-                          + 'Please upgrade your SPM toolbox.')
-                    tissue_map = os.path.join(spm_path, 'toolbox/Seg/TPM.nii')
-                elif version['name'] == 'SPM12':
-                    tissue_map = os.path.join(spm_path, 'tpm/TPM.nii')
-                else:
-                    raise RuntimeError('SPM version 8 or 12 could not be found. Please upgrade your SPM toolbox.')
-            if isinstance(version, str):
-                if float(version) >= 12.7169:
-                    # Path depends on version of SPM Standalone
-                    if os.path.exists(os.path.join(str(spm_home), 'spm12_mcr/spm/spm12/tpm/')):
-                        tissue_map = os.path.join(str(spm_home), 'spm12_mcr/spm/spm12/tpm/TPM.nii')
-                    else:
-                        tissue_map = os.path.join(str(spm_home), 'spm12_mcr/spm12/spm12/tpm/TPM.nii')
-                else:
-                    raise RuntimeError('SPM standalone version not supported. Please upgrade SPM standalone.')
-        else:
-            raise RuntimeError('SPM could not be found. Please verify your SPM_HOME environment variable.')
+        # Get Tissue Probability Map from SPM
+        tissue_map = get_tpm()
 
         # Unzipping
         # =========
@@ -307,7 +277,7 @@ class T1VolumeDartel2MNI(cpe.Pipeline):
 
             join_smoothing_node = npe.JoinNode(interface=nutil.Function(input_names=['smoothed_normalized_files'],
                                                                         output_names=['smoothed_normalized_files'],
-                                                                        function=join_smoothed_files),
+                                                                        function=dartel2mni_utils.join_smoothed_files),
                                                joinsource='smoothing_node',
                                                joinfield='smoothed_normalized_files',
                                                name='join_smoothing_node')
@@ -319,27 +289,15 @@ class T1VolumeDartel2MNI(cpe.Pipeline):
         else:
             self.output_node.inputs.smoothed_normalized_files = []
 
-        # Atlas Statistics
-        # ================
-        atlas_stats_node = npe.MapNode(nutil.Function(input_names=['in_image',
-                                                                   'in_atlas_list'],
-                                                      output_names=['atlas_statistics'],
-                                                      function=atlas_statistics),
-                                       name='atlas_stats_node',
-                                       iterfield=['in_image'])
-        atlas_stats_node.inputs.in_atlas_list = self.parameters['atlas_list']
-
         # Connection
         # ==========
         self.connect([
-            (self.input_node, unzip_tissues_node, [('apply_to_files', 'in_file')]),
+            (self.input_node, unzip_tissues_node, [('native_segmentations', 'in_file')]),
             (self.input_node, unzip_flowfields_node, [('flowfield_files', 'in_file')]),
             (self.input_node, unzip_template_node, [('template_file', 'in_file')]),
             (unzip_tissues_node, dartel2mni_node, [('out_file', 'apply_to_files')]),
-            (unzip_flowfields_node, dartel2mni_node, [(('out_file', prepare_flowfields, self.parameters['tissues']),
+            (unzip_flowfields_node, dartel2mni_node, [(('out_file', dartel2mni_utils.prepare_flowfields, self.parameters['tissues']),
                                                        'flowfield_files')]),
             (unzip_template_node, dartel2mni_node, [('out_file', 'template_file')]),
-            (dartel2mni_node, self.output_node, [('normalized_files', 'normalized_files')]),
-            (dartel2mni_node, atlas_stats_node, [(('normalized_files', select_gm_images), 'in_image')]),
-            (atlas_stats_node, self.output_node, [('atlas_statistics', 'atlas_statistics')])
+            (dartel2mni_node, self.output_node, [('normalized_files', 'normalized_files')])
         ])

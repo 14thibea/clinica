@@ -412,7 +412,9 @@ def dcm_to_nii(input_path, output_path, bids_name):
     """
     import os
     from os import path
+    import re
     import subprocess
+    from glob import glob
     from clinica.utils.stream import cprint
     from colorama import Fore
 
@@ -429,6 +431,13 @@ def dcm_to_nii(input_path, output_path, bids_name):
                    shell=True,
                    stderr=subprocess.DEVNULL,
                    stdout=subprocess.DEVNULL)
+
+    # If "_t" - the trigger delay time - exists in dcm2niix output filename, we remove it
+    exception_t = glob(path.join(output_path, bids_name + '_t[0-9]*'))
+    for trigger_time in exception_t:
+        res = re.search('_t\d+\.', trigger_time)
+        no_trigger_time = trigger_time.replace(trigger_time[res.start(): res.end()], '.')
+        os.rename(trigger_time, no_trigger_time)
 
     # If dcm2niix didn't work use dcm2nii
     if not os.path.exists(path.join(output_path, bids_name + '.nii.gz')):
@@ -863,10 +872,10 @@ def convert_flair(folder_input, folder_output, name, fixed_file=False):
             flair_path = glob(path.join(flair_lst[0], '*.nii.gz*'))[0]
             copy(flair_path, path.join(folder_output, name + (get_bids_suff('Flair')) + '.nii.gz'))
         elif len(flair_lst) == 0:
-                return -1
+            return -1
         elif len(flair_lst) > 1:
-                logging.warning('Multiple FLAIR found, computation aborted.')
-                raise('Aborted')
+            logging.warning('Multiple FLAIR found, computation aborted.')
+            raise('Aborted')
 
 
 def convert_fmri(folder_input, folder_output, name, fixed_fmri=False, task_name='rest'):

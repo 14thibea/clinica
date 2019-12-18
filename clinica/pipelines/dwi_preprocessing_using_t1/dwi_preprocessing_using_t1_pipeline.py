@@ -1,6 +1,7 @@
 # coding: utf8
 
 import clinica.pipelines.engine as cpe
+from nipype import config
 
 __author__ = ["Thomas Jacquemont", "Alexandre Routier"]
 __copyright__ = "Copyright 2016-2019 The Aramis Lab Team"
@@ -8,6 +9,12 @@ __credits__ = ["Nipype"]
 __license__ = "See LICENSE.txt file"
 __version__ = "0.1.0"
 __status__ = "Development"
+
+
+# Use hash instead of parameters for iterables folder names
+# Otherwise path will be too long and generate OSError
+cfg = dict(execution={'parameterize_dirs': False})
+config.update_config(cfg)
 
 
 class DwiPreprocessingUsingT1(cpe.Pipeline):
@@ -29,16 +36,16 @@ class DwiPreprocessingUsingT1(cpe.Pipeline):
 
 
     """
-    def __init__(self, bids_directory=None, caps_directory=None, tsv_file=None,
-                 name=None, low_bval=5):
+    def __init__(self,
+                 bids_directory=None,
+                 caps_directory=None,
+                 tsv_file=None,
+                 base_dir=None,
+                 name=None,
+                 low_bval=5):
         """
 
         Args:
-            bids_directory(str): Input directory in a BIDS hierarchy.
-            caps_directory(str): Output directory in a CAPS hierarchy.
-            tsv_file(str): TSV file containing the list of participants
-                (participant_id) with their sessions (session_id).
-            name(optional[str]): Name of the pipeline
             low_bval (int): Define the b0 volumes as all volume
                 bval <= lowbval. (Default = 5)
         """
@@ -48,6 +55,7 @@ class DwiPreprocessingUsingT1(cpe.Pipeline):
             bids_directory=bids_directory,
             caps_directory=caps_directory,
             tsv_file=tsv_file,
+            base_dir=base_dir,
             name=name)
 
         self._low_bval = low_bval
@@ -92,157 +100,71 @@ class DwiPreprocessingUsingT1(cpe.Pipeline):
         """
         import nipype.interfaces.utility as nutil
         import nipype.pipeline.engine as npe
-        import nipype.interfaces.io as nio
-
+        from clinica.utils.inputs import clinica_file_reader
         from clinica.utils.stream import cprint
         from clinica.utils.dwi import check_dwi_volume
+        from clinica.utils.exceptions import ClinicaBIDSError, ClinicaException
+        import clinica.utils.input_files as input_files
 
-        cprint('Found %s image(s) in BIDS dataset' % len(self.subjects))
-        for i in range(len(self.subjects)):
-            # cprint('------- SUBJECT %s SESSION %s -------'
-            #        % (self.subjects[i], self.sessions[i]))
+        all_errors = []
+        try:
+            t1w_files = clinica_file_reader(self.subjects,
+                                            self.sessions,
+                                            self.bids_directory,
+                                            input_files.T1W_NII)
+        except ClinicaException as e:
+            all_errors.append(e)
+        try:
+            dwi_files = clinica_file_reader(self.subjects,
+                                            self.sessions,
+                                            self.bids_directory,
+                                            input_files.DWI_NII)
+        except ClinicaException as e:
+            all_errors.append(e)
 
-            # Check b-val file and compute the nb of b0 from file:
-            bval_file = self.bids_layout.get(
-                return_type='file',
-                type='dwi',
-                extensions=['bval'],
-                session=self.sessions[i].replace('ses-', ''),
-                subject=self.subjects[i].replace('sub-', '')
-            )
-            if len(bval_file) != 1:
-                raise IOError('Expected to find 1 bval file for subject '
-                              + self.subjects[i]
-                              + ' and session '
-                              + self.sessions[i]
-                              + ' but found '
-                              + str(len(bval_file))
-                              + ' bval instead.')
+        # bval files
+        try:
+            bval_files = clinica_file_reader(self.subjects,
+                                             self.sessions,
+                                             self.bids_directory,
+                                             input_files.DWI_BVAL)
+        except ClinicaException as e:
+            all_errors.append(e)
 
-            # Check b-vec file:
-            bvec_file = self.bids_layout.get(
-                return_type='file',
-                type='dwi',
-                extensions=['bvec'],
-                session=self.sessions[i].replace('ses-', ''),
-                subject=self.subjects[i].replace('sub-', '')
-            )
-            if len(bvec_file) != 1:
-                raise IOError('Expected to find 1 bvec file for subject '
-                              + self.subjects[i]
-                              + ' and session '
-                              + self.sessions[i]
-                              + ' but found '
-                              + str(len(bvec_file))
-                              + ' bvec instead.')
+        # bvec files
+        try:
+            bvec_files = clinica_file_reader(self.subjects,
+                                             self.sessions,
+                                             self.bids_directory,
+                                             input_files.DWI_BVEC)
+        except ClinicaException as e:
+            all_errors.append(e)
 
-            # Check DWI file:
-            dwi_file = self.bids_layout.get(
-                return_type='file',
-                type='dwi',
-                extensions=['.nii|.nii.gz'],
-                session=self.sessions[i].replace('ses-', ''),
-                subject=self.subjects[i].replace('sub-', '')
-            )
-            if len(dwi_file) != 1:
-                raise IOError('Expected to find 1 dwi file for subject '
-                              + self.subjects[i]
-                              + ' and session '
-                              + self.sessions[i]
-                              + ' but found '
-                              + str(len(dwi_file))
-                              + ' dwi instead.')
+        if len(all_errors) > 0:
+            error_message = 'Clinica faced error(s) while trying to read files in your BIDS directory.\n'
+            for msg in all_errors:
+                error_message += str(msg)
+            raise ClinicaBIDSError(error_message)
 
-            # Check that the number of DWI, b-vecs & b-val are the same:
-            check_dwi_volume(
-                in_dwi=dwi_file[0], in_bvec=bvec_file[0], in_bval=bval_file[0])
+        # Perform the check after potential issue while reading inputs
+        for (dwi, bvec, bval) in zip(dwi_files, bvec_files, bval_files):
+            check_dwi_volume(in_dwi=dwi, in_bvec=bvec, in_bval=bval)
 
-            # Check T1w file:
-            t1_file = self.bids_layout.get(
-                return_type='file',
-                type='T1w',
-                extensions=['.nii|.nii.gz'],
-                session=self.sessions[i].replace('ses-', ''),
-                subject=self.subjects[i].replace('sub-', '')
-            )
-            if len(t1_file) != 1:
-                raise IOError('Expected to find 1 T1w file for subject '
-                              + self.subjects[i]
-                              + ' and session '
-                              + self.sessions[i]
-                              + ' but found '
-                              + str(len(t1_file))
-                              + ' T1w instead.')
-
-        # Iterables:
-        iterables_node = npe.Node(name="LoadingCLIArguments",
-                                  interface=nutil.IdentityInterface(
-                                      fields=['subject_id', 'session_id'],
-                                      mandatory_inputs=True)
-                                  )
-        iterables_node.iterables = [('subject_id', self.subjects),
-                                    ('session_id', self.sessions)]
-        iterables_node.synchronize = True
-
-        # T1 DataGrabber
-        t1_bids_reader = npe.Node(
-            nio.DataGrabber(infields=['subject_id', 'session',
-                                      'subject_repeat', 'session_repeat'],
-                            outfields=['out_files']), name='t1_bids_reader')
-        t1_bids_reader.inputs.base_directory = self.bids_directory
-        t1_bids_reader.inputs.template = '%s/%s/anat/%s_%s_*T1w.nii*'
-        t1_bids_reader.inputs.sort_filelist = False
-
-        # DWI DataGrabber
-        dwi_bids_reader = npe.Node(
-            nio.DataGrabber(infields=['subject_id', 'session',
-                                      'subject_repeat', 'session_repeat'],
-                            outfields=['out_files']), name='dwi_bids_reader')
-        dwi_bids_reader.inputs.base_directory = self.bids_directory
-        dwi_bids_reader.inputs.template = '%s/%s/dwi/%s_%s_*dwi.nii*'
-        dwi_bids_reader.inputs.sort_filelist = False
-
-        # Bval DataGrabber
-        bval_bids_reader = npe.Node(
-            nio.DataGrabber(infields=['subject_id', 'session',
-                                      'subject_repeat', 'session_repeat'],
-                            outfields=['out_files']), name='bval_bids_reader')
-        bval_bids_reader.inputs.base_directory = self.bids_directory
-        bval_bids_reader.inputs.template = '%s/%s/dwi/%s_%s_*dwi.bval'
-        bval_bids_reader.inputs.sort_filelist = False
-
-        # Bvec dataGrabber
-        bvec_bids_reader = npe.Node(
-            nio.DataGrabber(infields=['subject_id', 'session',
-                                      'subject_repeat', 'session_repeat'],
-                            outfields=['out_files']), name='bvec_bids_reader')
-        bvec_bids_reader.inputs.base_directory = self.bids_directory
-        bvec_bids_reader.inputs.template = '%s/%s/dwi/%s_%s_*dwi.bvec'
-        bvec_bids_reader.inputs.sort_filelist = False
+        read_input_node = npe.Node(name="LoadingCLIArguments",
+                                   interface=nutil.IdentityInterface(
+                                       fields=self.get_input_fields(),
+                                       mandatory_inputs=True),
+                                   iterables=[('T1w', t1w_files),
+                                              ('dwi', dwi_files),
+                                              ('bvec', bvec_files),
+                                              ('bval', bval_files)],
+                                   synchronize=True)
 
         self.connect([
-            # Iterables:
-            (iterables_node,      t1_bids_reader,  [('subject_id',       'subject_id'),  # noqa
-                                                    ('session_id',          'session'),  # noqa
-                                                    ('subject_id',   'subject_repeat'),  # noqa
-                                                    ('session_id', 'session_repeat')]),  # noqa
-            (iterables_node,     dwi_bids_reader,  [('subject_id',       'subject_id'),  # noqa
-                                                    ('session_id',          'session'),  # noqa
-                                                    ('subject_id',   'subject_repeat'),  # noqa
-                                                    ('session_id', 'session_repeat')]),  # noqa
-            (iterables_node,     bval_bids_reader, [('subject_id',       'subject_id'),  # noqa
-                                                    ('session_id',          'session'),  # noqa
-                                                    ('subject_id',   'subject_repeat'),  # noqa
-                                                    ('session_id', 'session_repeat')]),  # noqa
-            (iterables_node,     bvec_bids_reader, [('subject_id',       'subject_id'),  # noqa
-                                                    ('session_id',          'session'),  # noqa
-                                                    ('subject_id',   'subject_repeat'),  # noqa
-                                                    ('session_id', 'session_repeat')]),  # noqa
-            # Inputnode:
-            (t1_bids_reader,     self.input_node,  [('out_files',             'T1w')]),  # noqa
-            (dwi_bids_reader,    self.input_node,  [('out_files',             'dwi')]),  # noqa
-            (bval_bids_reader,   self.input_node,  [('out_files',            'bval')]),  # noqa
-            (bvec_bids_reader,   self.input_node,  [('out_files',            'bvec')])   # noqa
+            (read_input_node, self.input_node, [('T1w', 'T1w')]),
+            (read_input_node, self.input_node, [('dwi', 'dwi')]),
+            (read_input_node, self.input_node, [('bvec', 'bvec')]),
+            (read_input_node, self.input_node, [('bval', 'bval')])
         ])
 
     def build_output_node(self):
@@ -252,7 +174,7 @@ class DwiPreprocessingUsingT1(cpe.Pipeline):
         import nipype.pipeline.engine as npe
         import nipype.interfaces.io as nio
         from os.path import join
-        from clinica.utils.io import fix_join
+        from clinica.utils.nipype import fix_join
         import clinica.pipelines.dwi_preprocessing_using_t1.dwi_preprocessing_using_t1_utils as utils
 
         # Find container path from DWI filename

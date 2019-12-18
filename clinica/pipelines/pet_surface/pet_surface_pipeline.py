@@ -58,20 +58,10 @@ class PetSurface(cpe.Pipeline):
         from clinica.utils.stream import cprint
         import nipype.interfaces.utility as nutil
         import nipype.pipeline.engine as npe
-        from clinica.lib.pycaps.caps_layout import CAPSLayout
-
-        def handle_files(subject, session, files, description, list_missing_files):
-            from clinica.utils.stream import cprint
-            missing_f = True
-            for i in range(len(files)):
-                if subject + '_' + session in files[i] and missing_f is True:
-                    result = files[i]
-                    missing_f = False
-            if missing_f:
-                list_missing_files.append('(' + subject + ' - ' + session + ')' + 'file for the following category was not found : ' + description)
-                result = ' * missing *'
-            cprint(description + ' = ' + result)
-            return result
+        from clinica.utils.inputs import clinica_file_reader
+        from clinica.utils.exceptions import ClinicaBIDSError, ClinicaException
+        from clinica.iotools.utils.data_handling import check_volume_location_in_world_coordinate_system, check_relative_volume_location_in_world_coordinate_system
+        import clinica.utils.input_files as input_files
 
         read_parameters_node = npe.Node(name="LoadingCLIArguments",
                                         interface=nutil.IdentityInterface(
@@ -79,144 +69,99 @@ class PetSurface(cpe.Pipeline):
                                             mandatory_inputs=True),
                                         synchronize=True)
 
-        read_parameters_node.inputs.pet = []
-        read_parameters_node.inputs.orig_nu = []
-        read_parameters_node.inputs.psf = []
-        read_parameters_node.inputs.white_surface_right = []
-        read_parameters_node.inputs.white_surface_left = []
-        read_parameters_node.inputs.destrieux_left = []
-        read_parameters_node.inputs.destrieux_right = []
-        read_parameters_node.inputs.desikan_left = []
-        read_parameters_node.inputs.desikan_right = []
-        caps_layout = CAPSLayout(self.caps_directory)
+        if self.parameters['pet_type'].lower() == 'fdg':
+            pet_file_to_grab = input_files.PET_FDG_NII
+            pet_json_file_to_grab = input_files.PET_FDG_JSON
+        elif self.parameters['pet_type'].lower() == 'av45':
+            pet_file_to_grab = input_files.PET_AV45_NII
+            pet_json_file_to_grab = input_files.PET_AV45_JSON
+        else:
+            raise ClinicaException('[Error] PET type ' + str(self.parameters['pet_type'] + ' not supported'))
 
-        cprint('------- INPUT FILES FOR EACH SUBJECTS -------')
-        subjects_regex = '|'.join(sub[4:] for sub in self.subjects)
-        unique_session = set(list(self.sessions))
-        sessions_regex = '|'.join(sub[4:] for sub in unique_session)
+        all_errors = []
+        try:
 
-        cprint('  * grabbing all pet files from BIDS folder')
-        pet_file = self.bids_layout.get(return_type='file',
-                                        type='pet',
-                                        extensions=[self.parameters['pet_type'] + '_pet.nii',
-                                                    self.parameters['pet_type'].upper() + '_pet.nii',
-                                                    self.parameters['pet_type'] + '_pet.nii.gz',
-                                                    self.parameters['pet_type'].upper() + '_pet.nii.gz'],
-                                        subject=subjects_regex,
-                                        session=sessions_regex)
-        cprint('  * grabbing all orig_nu files from CAPS folder')
-        orig_nu_file = caps_layout.get(return_type='file',
-                                       freesurfer_file='orig_nu',
-                                       extensions='mgz|MGZ',
-                                       regex_search=True,
-                                       subject=subjects_regex,
-                                       session=sessions_regex)
+            read_parameters_node.inputs.pet = clinica_file_reader(self.subjects,
+                                                                  self.sessions,
+                                                                  self.bids_directory,
+                                                                  pet_file_to_grab)
+        except ClinicaException as e:
+            all_errors.append(e)
 
-        cprint('  * grabbing all point spread function files from BIDS folder')
-        psf_file = self.bids_layout.get(return_type='file',
-                                        type='pet',
-                                        extensions=[self.parameters['pet_type'] + '_pet.json',
-                                                    self.parameters['pet_type'].upper() + '_pet.json'],
-                                        subject=subjects_regex,
-                                        session=sessions_regex)
+        try:
+            read_parameters_node.inputs.orig_nu = clinica_file_reader(self.subjects,
+                                                                      self.sessions,
+                                                                      self.caps_directory,
+                                                                      input_files.T1_FS_ORIG_NU)
+        except ClinicaException as e:
+            all_errors.append(e)
 
-        cprint('  * grabbing all right hemisphere white surface files from CAPS folder')
-        white_surface_left_file = caps_layout.get(return_type='file',
-                                                  freesurfer_file='lh',
-                                                  extensions='\\.white',
-                                                  regex_search=True,
-                                                  subject=subjects_regex,
-                                                  session=sessions_regex)
+        try:
+            read_parameters_node.inputs.psf = clinica_file_reader(self.subjects,
+                                                                  self.sessions,
+                                                                  self.bids_directory,
+                                                                  pet_json_file_to_grab)
+        except ClinicaException as e:
+            all_errors.append(e)
 
-        cprint('  * grabbing all left hemisphere white surface files from CAPS folder')
-        white_surface_right_file = caps_layout.get(return_type='file',
-                                                   freesurfer_file='rh',
-                                                   extensions='\\.white',
-                                                   regex_search=True,
-                                                   subject=subjects_regex,
-                                                   session=sessions_regex)
+        try:
+            read_parameters_node.inputs.white_surface_right = clinica_file_reader(self.subjects,
+                                                                                  self.sessions,
+                                                                                  self.caps_directory,
+                                                                                  input_files.T1_FS_WM_SURF_R)
+        except ClinicaException as e:
+            all_errors.append(e)
 
-        cprint('  * grabbing all left hemisphere Destrieux atlases in subject\'s space from CAPS folder')
-        destrieux_left_files = caps_layout.get(return_type='file',
-                                               freesurfer_file='lh.aparc.a2009s.annot',
-                                               regex_search=True,
-                                               subject=subjects_regex,
-                                               session=sessions_regex)
+        try:
+            read_parameters_node.inputs.white_surface_left = clinica_file_reader(self.subjects,
+                                                                                 self.sessions,
+                                                                                 self.caps_directory,
+                                                                                 input_files.T1_FS_WM_SURF_L)
+        except ClinicaException as e:
+            all_errors.append(e)
 
-        cprint('  * grabbing all right hemisphere Destrieux atlases in subject\'s space from CAPS folder')
-        destrieux_right_files = caps_layout.get(return_type='file',
-                                                freesurfer_file='rh.aparc.a2009s.annot',
-                                                regex_search=True,
-                                                subject=subjects_regex,
-                                                session=sessions_regex)
+        try:
+            read_parameters_node.inputs.destrieux_left = clinica_file_reader(self.subjects,
+                                                                             self.sessions,
+                                                                             self.caps_directory,
+                                                                             input_files.T1_FS_DESTRIEUX_PARC_L)
+        except ClinicaException as e:
+            all_errors.append(e)
 
-        cprint('  * grabbing all left hemisphere Desikan-Killiany atlases in subject\'s space from CAPS folder')
-        desikan_left_files = caps_layout.get(return_type='file',
-                                             freesurfer_file='lh.aparc.annot',
-                                             regex_search=True,
-                                             subject=subjects_regex,
-                                             session=sessions_regex)
+        try:
+            read_parameters_node.inputs.destrieux_right = clinica_file_reader(self.subjects,
+                                                                              self.sessions,
+                                                                              self.caps_directory,
+                                                                              input_files.T1_FS_DESTRIEUX_PARC_R)
+        except ClinicaException as e:
+            all_errors.append(e)
 
-        cprint('  * grabbing all right hemisphere Desikan-Killiany atlases in subject\'s space from CAPS folder')
-        desikan_right_files = caps_layout.get(return_type='file',
-                                              freesurfer_file='rh.aparc.annot',
-                                              regex_search=True,
-                                              subject=subjects_regex,
-                                              session=sessions_regex)
+        try:
+            read_parameters_node.inputs.desikan_left = clinica_file_reader(self.subjects,
+                                                                           self.sessions,
+                                                                           self.caps_directory,
+                                                                           input_files.T1_FS_DESIKAN_PARC_L)
+        except ClinicaException as e:
+            all_errors.append(e)
 
-        missing_files = []
-        for i in range(len(self.subjects)):
-            read_parameters_node.inputs.pet.append(handle_files(self.subjects[i],
-                                                                self.sessions[i],
-                                                                pet_file,
-                                                                'PET file',
-                                                                missing_files))
-            read_parameters_node.inputs.orig_nu.append(handle_files(self.subjects[i],
-                                                                    self.sessions[i],
-                                                                    orig_nu_file,
-                                                                    'orig_nu',
-                                                                    missing_files))
-            read_parameters_node.inputs.psf.append(handle_files(self.subjects[i],
-                                                                self.sessions[i],
-                                                                psf_file,
-                                                                'pet json',
-                                                                missing_files))
-            read_parameters_node.inputs.white_surface_left.append(handle_files(self.subjects[i],
-                                                                               self.sessions[i],
-                                                                               white_surface_left_file,
-                                                                               'lh.white',
-                                                                               missing_files))
-            read_parameters_node.inputs.white_surface_right.append(handle_files(self.subjects[i],
-                                                                                self.sessions[i],
-                                                                                white_surface_right_file,
-                                                                                'rh.white',
-                                                                                missing_files))
-            read_parameters_node.inputs.destrieux_left.append(handle_files(self.subjects[i],
-                                                                           self.sessions[i],
-                                                                           destrieux_left_files,
-                                                                           'destrieux lh',
-                                                                           missing_files))
-            read_parameters_node.inputs.destrieux_right.append(handle_files(self.subjects[i],
-                                                                            self.sessions[i],
-                                                                            destrieux_right_files,
-                                                                            'destrieux rh',
-                                                                            missing_files))
-            read_parameters_node.inputs.desikan_left.append(handle_files(self.subjects[i],
-                                                                         self.sessions[i],
-                                                                         desikan_left_files,
-                                                                         'desikan lh',
-                                                                         missing_files))
-            read_parameters_node.inputs.desikan_right.append(handle_files(self.subjects[i],
-                                                                          self.sessions[i],
-                                                                          desikan_right_files,
-                                                                          'desikan rh',
-                                                                          missing_files))
+        try:
+            read_parameters_node.inputs.desikan_right = clinica_file_reader(self.subjects,
+                                                                            self.sessions,
+                                                                            self.caps_directory,
+                                                                            input_files.T1_FS_DESIKAN_PARC_R)
+        except ClinicaException as e:
+            all_errors.append(e)
 
-        if len(missing_files) > 0:
-            error_string = 'The following elements are missing : \n'
-            for missing_f in missing_files:
-                error_string += missing_f + ' \n'
-            raise Exception(error_string)
+        if len(all_errors) > 0:
+            error_message = 'Clinica faced errors while trying to read files in your BIDS or CAPS directories.\n'
+            for msg in all_errors:
+                error_message += str(msg)
+            raise ClinicaException(error_message)
+
+        check_relative_volume_location_in_world_coordinate_system('T1w-MRI (orig_nu.mgz)', read_parameters_node.inputs.orig_nu,
+                                                                  self.parameters['pet_type'].upper() + ' PET', read_parameters_node.inputs.pet,
+                                                                  self.bids_directory,
+                                                                  self.parameters['pet_type'].lower())
 
         self.connect([
             (read_parameters_node,      self.input_node,    [('pet',                    'pet')]),
@@ -255,6 +200,9 @@ class PetSurface(cpe.Pipeline):
         import nipype.pipeline.engine as npe
         import nipype.interfaces.utility as niu
         import clinica.pipelines.pet_surface.pet_surface_utils as utils
+        from colorama import Fore
+        from nipype.interfaces import spm
+        import platform
 
         full_pipe = npe.MapNode(niu.Function(input_names=['subject_id',
                                                           'session_id',
@@ -272,7 +220,8 @@ class PetSurface(cpe.Pipeline):
                                                           'desikan_left',
                                                           'desikan_right',
                                                           'destrieux_left',
-                                                          'destrieux_right'],
+                                                          'destrieux_right',
+                                                          'use_spm_standalone'],
                                              output_names=[],
                                              function=utils.get_wf),
                                 name='full_pipeline_mapnode',
@@ -291,7 +240,7 @@ class PetSurface(cpe.Pipeline):
         full_pipe.inputs.subject_id = self.subjects
         full_pipe.inputs.caps_dir = self.caps_directory
         full_pipe.inputs.session_id = self.sessions
-        full_pipe.inputs.working_directory_subjects = self.parameters['wd']
+        full_pipe.inputs.working_directory_subjects = self.base_dir
         full_pipe.inputs.pet_type = self.parameters['pet_type']
         full_pipe.inputs.csv_segmentation = os.path.abspath(os.path.join(os.path.dirname(os.path.realpath(__file__)),
                                                                          '..',
@@ -314,6 +263,24 @@ class PetSurface(cpe.Pipeline):
                                                                                     'region-cerebellumPons_eroded-6mm_mask.nii.gz'))
 
         full_pipe.inputs.matscript_folder_inverse_deformation = os.path.abspath(os.path.dirname(os.path.realpath(__file__)))
+
+        # This section of code determines wether to use SPM standalone or not
+        full_pipe.inputs.use_spm_standalone = False
+        if all(elem in os.environ.keys() for elem in ['SPMSTANDALONE_HOME', 'MCR_HOME']):
+            if os.path.exists(os.path.expandvars('$SPMSTANDALONE_HOME')) and os.path.exists(os.path.expandvars('$MCR_HOME')):
+                print(Fore.GREEN + 'SPM standalone has been found and will be used in this pipeline' + Fore.RESET)
+                if platform.system() == 'Darwin':
+                    matlab_cmd = ('cd ' + os.path.expandvars('$SPMSTANDALONE_HOME') + ' && ' + './run_spm12.sh'
+                                  + ' ' + os.environ['MCR_HOME']
+                                  + ' script')
+                elif platform.system() == 'Linux':
+                    matlab_cmd = (os.path.join(os.path.expandvars('$SPMSTANDALONE_HOME'), 'run_spm12.sh')
+                                  + ' ' + os.environ['MCR_HOME']
+                                  + ' script')
+                spm.SPMCommand.set_mlab_paths(matlab_cmd=matlab_cmd, use_mcr=True)
+                full_pipe.inputs.use_spm_standalone = True
+            else:
+                raise FileNotFoundError('$SPMSTANDALONE_HOME and $MCR_HOME are defined, but linked to non existent folder ')
 
         # Connection
         # ==========
