@@ -70,6 +70,7 @@ class Pipeline(Workflow):
                  tsv_file=None,
                  overwrite_caps=False,
                  base_dir=None,
+                 parameters={},
                  name=None):
         """Init a Pipeline object.
 
@@ -112,7 +113,7 @@ class Pipeline(Workflow):
             self._name = name
         else:
             self._name = self.__class__.__name__
-        self._parameters = {}
+        self._parameters = parameters
 
         if self._bids_directory is None:
             if self._caps_directory is None:
@@ -122,7 +123,7 @@ class Pipeline(Workflow):
 
             check_caps_folder(self._caps_directory)
             input_dir = self._caps_directory
-            is_bids_dir = True
+            is_bids_dir = False
         else:
             check_bids_folder(self._bids_directory)
             input_dir = self._bids_directory
@@ -218,6 +219,7 @@ class Pipeline(Workflow):
         """
         if not self.is_built:
             self.check_dependencies()
+            self.check_pipeline_parameters()
             if not self.has_input_connections():
                 self.build_input_node()
             self.build_core_nodes()
@@ -328,7 +330,8 @@ class Pipeline(Workflow):
             'freesurfer': chk.check_freesurfer,
             'fsl': chk.check_fsl,
             'mrtrix': chk.check_mrtrix,
-            'matlab': chk.check_matlab
+            'matlab': chk.check_matlab,
+            'petpvc': chk.check_petpvc,
         }
         check_binary = chk.is_binary_present
         # check_toolbox = chk.is_toolbox_present
@@ -456,15 +459,9 @@ class Pipeline(Workflow):
         free_space_caps = caps_stat.f_bavail * caps_stat.f_frsize
         free_space_wd = wd_stat.f_bavail * wd_stat.f_frsize
 
-        # space estimation file location
-        info_pipelines = read_csv(join(dirname(abspath(__file__)),
-                                       'space_required_by_pipeline.csv'),
-                                  sep=';')
-        pipeline_list = list(info_pipelines.pipeline_name)
         try:
-            idx_pipeline = pipeline_list.index(self._name)
-            space_needed_caps_1_session = info_pipelines.space_caps[idx_pipeline]
-            space_needed_wd_1_session = info_pipelines.space_wd[idx_pipeline]
+            space_needed_caps_1_session = self.info['space_caps']
+            space_needed_wd_1_session = self.info['space_wd']
             space_needed_caps = n_sessions * human2bytes(space_needed_caps_1_session)
             space_needed_wd = n_sessions * human2bytes(space_needed_wd_1_session)
             error = ''
@@ -507,7 +504,7 @@ class Pipeline(Workflow):
                     cprint('Exiting clinica...')
                     sys.exit()
 
-        except ValueError:
+        except KeyError:
             cprint(Fore.RED + 'No info on how much size the pipeline takes. '
                    + 'Running anyway...' + Fore.RESET)
 
@@ -899,4 +896,9 @@ class Pipeline(Workflow):
     def check_custom_dependencies(self):
         """Checks dependencies provided by the developer.
         """
+        pass
+
+    @abc.abstractmethod
+    def check_pipeline_parameters(self):
+        """Check pipeline parameters."""
         pass

@@ -586,7 +586,7 @@ def paths_to_bids(path_to_dataset, path_to_csv, bids_dir, modality):
     # Reshape inputs to give it as a list to the workers
     images_list = []
     for i in range(total):
-        images_list.append(images.ix[i])
+        images_list.append(images.iloc[i])
 
     # intializer are used with the counter variable to keep track of how many
     # files have been processed
@@ -626,7 +626,7 @@ def create_participants_df_AIBL(input_path, clinical_spec_path, clinical_data_di
         raise FileNotFoundError(clinical_spec_path
                                 + ' not found in clinical data.')
     participants_specs = pd.read_excel(clinical_spec_path,
-                                       sheetname='participant.tsv')
+                                       sheet_name='participant.tsv')
     participant_fields_db = participants_specs['AIBL']
     field_location = participants_specs[location_name]
     participant_fields_bids = participants_specs['BIDS CLINICA']
@@ -660,7 +660,7 @@ def create_participants_df_AIBL(input_path, clinical_spec_path, clinical_data_di
                 file_to_read_path = path.join(clinical_data_dir, location)
 
                 if file_ext == '.xlsx':
-                    file_to_read = pd.read_excel(file_to_read_path, sheetname=sheet)
+                    file_to_read = pd.read_excel(file_to_read_path, sheet_name=sheet)
                 elif file_ext == '.csv':
                     file_to_read = pd.read_csv(file_to_read_path)
                 prev_location = location
@@ -673,14 +673,14 @@ def create_participants_df_AIBL(input_path, clinical_spec_path, clinical_data_di
                 if participant_fields_bids[i] == 'alternative_id_1' and \
                         (file_to_read[participant_fields_db[i]].dtype == np.float64 or file_to_read[
                             participant_fields_db[i]].dtype == np.int64):
-                    if not pd.isnull(file_to_read.get_value(j, participant_fields_db[i])):
+                    if not pd.isnull(file_to_read.at[j, participant_fields_db[i]]):
                         # value_to_append = str(file_to_read.get_value(j, participant_fields_db[i])).rstrip('.0')
-                        value_to_append = str(file_to_read.get_value(j, participant_fields_db[i]))
+                        value_to_append = str(file_to_read.at[j, participant_fields_db[i]])
 
                     else:
                         value_to_append = np.NaN
                 else:
-                    value_to_append = file_to_read.get_value(j, participant_fields_db[i])
+                    value_to_append = file_to_read.at[j, participant_fields_db[i]]
                 field_col_values.append(value_to_append)
             # Add the extracted column to the participant_df
             participant_df[participant_fields_bids[i]] = pd.Series(field_col_values)
@@ -825,7 +825,7 @@ def get_examdates(rid, examdates, viscodes, clinical_data_dir):
         for csv_file in csv_list:
             csv_data = pd.read_csv(path.join(clinical_data_dir, csv_file), low_memory=False)
             exam_date = csv_data[(csv_data.RID == rid) & (csv_data.VISCODE == viscodes[e])]
-            if exam_date.shape[0] > 0 and exam_date.iloc[0].EXAMDATE != '-4':
+            if not exam_date.empty and exam_date.iloc[0].EXAMDATE != '-4':
                 exam = exam_date.iloc[0].EXAMDATE
                 break
 
