@@ -1,9 +1,10 @@
 # -*- coding: utf-8 -*-
-import clinica.pipelines.engine as cpe
-
 # Use hash instead of parameters for iterables folder names
 # Otherwise path will be too long and generate OSError
 from nipype import config
+
+import clinica.pipelines.engine as cpe
+
 cfg = dict(execution={'parameterize_dirs': False})
 config.update_config(cfg)
 
@@ -19,6 +20,21 @@ class T1Linear(cpe.Pipeline):
     Returns:
         A clinica pipeline object containing the T1 Linear pipeline.
     """
+
+    @staticmethod
+    def get_processed_images(caps_directory, subjects, sessions):
+        import os
+        from clinica.utils.inputs import clinica_file_reader
+        from clinica.utils.input_files import T1W_LINEAR_CROPPED
+        from clinica.utils.filemanip import extract_image_ids
+        image_ids = []
+        if os.path.isdir(caps_directory):
+            cropped_files = clinica_file_reader(
+                subjects, sessions,
+                caps_directory, T1W_LINEAR_CROPPED, False
+            )
+            image_ids = extract_image_ids(cropped_files)
+        return image_ids
 
     def check_custom_dependencies(self):
         """Check dependencies that can not be listed in the `info.json` file.
@@ -47,12 +63,12 @@ class T1Linear(cpe.Pipeline):
         """Build and connect an input node to the pipeline.
         """
         from os import pardir
-        from os.path import dirname, join, abspath, split, exists
-        import sys
+        from os.path import dirname, join, abspath, exists
+        from colorama import Fore
         import nipype.interfaces.utility as nutil
         import nipype.pipeline.engine as npe
-        from clinica.utils.inputs import check_bids_folder
         from clinica.utils.exceptions import ClinicaBIDSError, ClinicaException
+        from clinica.utils.filemanip import extract_subjects_sessions_from_filename
         from clinica.utils.inputs import clinica_file_reader
         from clinica.utils.input_files import T1W_NII
         from clinica.utils.inputs import fetch_file, RemoteFileStructure
@@ -60,7 +76,6 @@ class T1Linear(cpe.Pipeline):
         from clinica.utils.stream import cprint
 
         root = dirname(abspath(join(abspath(__file__), pardir, pardir)))
-        path_to_mask = join(root, 'resources', 'masks')
         path_to_mask = join(root, 'resources', 'masks')
         url_aramis = 'https://aramislab.paris.inria.fr/files/data/img_t1_linear/'
         FILE1 = RemoteFileStructure(
@@ -88,6 +103,20 @@ class T1Linear(cpe.Pipeline):
                 fetch_file(FILE1, path_to_mask)
             except IOError as err:
                 cprint('Unable to download required template (ref_crop) for processing:', err)
+
+        # Display image(s) already present in CAPS folder
+        # ===============================================
+        processed_ids = self.get_processed_images(self.caps_directory, self.subjects, self.sessions)
+        if len(processed_ids) > 0:
+            cprint("%sClinica found %s image(s) already processed in CAPS directory:%s" %
+                   (Fore.YELLOW, len(processed_ids), Fore.RESET))
+            for image_id in processed_ids:
+                cprint("%s\t%s%s" % (Fore.YELLOW, image_id.replace('_', ' | '), Fore.RESET))
+            cprint("%s\nImage(s) will be ignored by Clinica.\n%s" % (Fore.YELLOW, Fore.RESET))
+            input_ids = [p_id + '_' + s_id for p_id, s_id in
+                         zip(self.subjects, self.sessions)]
+            to_process_ids = list(set(input_ids) - set(processed_ids))
+            self.subjects, self.sessions = extract_subjects_sessions_from_filename(to_process_ids)
 
         # Inputs from anat/ folder
         # ========================
@@ -174,7 +203,7 @@ class T1Linear(cpe.Pipeline):
         import nipype.pipeline.engine as npe
         from clinica.utils.filemanip import get_filename_no_ext
         from nipype.interfaces import ants
-        from .t1_linear_utils import crop_nifti
+        from .t1_linear_utils import crop_nifti, print_end_pipeline
 
         image_id_node = npe.Node(
                 interface=nutil.Function(
@@ -218,6 +247,13 @@ class T1Linear(cpe.Pipeline):
                 )
         cropnifti.inputs.ref_crop = self.ref_crop
 
+        # 4. Print end message
+        print_end_message = npe.Node(
+            interface=nutil.Function(
+                input_names=['t1w', 'final_file'],
+                function=print_end_pipeline),
+            name='WriteEndMessage')
+
         # Connection
         # ==========
         self.connect([
@@ -231,9 +267,15 @@ class T1Linear(cpe.Pipeline):
             (ants_registration_node, self.output_node, [('out_matrix', 'affine_mat')]),
             (n4biascorrection, self.output_node, [('output_image', 'outfile_corr')]),
             (ants_registration_node, self.output_node, [('warped_image', 'outfile_reg')]),
-            ])
+            (self.input_node, print_end_message, [('t1w', 't1w')]),
+        ])
         if not (self.parameters.get('uncropped_image')):
             self.connect([
                 (ants_registration_node, cropnifti, [('warped_image', 'input_img')]),
                 (cropnifti, self.output_node, [('output_img', 'outfile_crop')]),
+                (cropnifti, print_end_message, [('output_img', 'final_file')]),
                 ])
+        else:
+            self.connect([
+                (ants_registration_node, print_end_message, [('warped_image', 'final_file')]),
+            ])

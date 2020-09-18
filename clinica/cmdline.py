@@ -205,7 +205,6 @@ def execute():
     from clinica.pipelines.dwi_preprocessing_using_t1.dwi_preprocessing_using_t1_cli import DwiPreprocessingUsingT1Cli
     from clinica.pipelines.dwi_dti.dwi_dti_cli import DwiDtiCli
     from clinica.pipelines.dwi_connectome.dwi_connectome_cli import DwiConnectomeCli
-    from clinica.pipelines.fmri_preprocessing.fmri_preprocessing_cli import fMRIPreprocessingCLI
     from clinica.pipelines.pet_volume.pet_volume_cli import PETVolumeCLI
     from clinica.pipelines.pet_surface.pet_surface_cli import PetSurfaceCLI
     from clinica.pipelines.pet_surface.pet_surface_longitudinal_cli import PetSurfaceLongitudinalCLI
@@ -221,13 +220,12 @@ def execute():
         # Main pipelines:
         T1FreeSurferCLI(),
         T1VolumeCLI(),
-        # T1FreeSurferLongitudinalCLI(),
+        T1FreeSurferLongitudinalCLI(),
         T1LinearCLI(),
         DwiPreprocessingUsingPhaseDiffFieldmapCli(),
         DwiPreprocessingUsingT1Cli(),
         DwiDtiCli(),
         DwiConnectomeCli(),
-        fMRIPreprocessingCLI(),
         PETVolumeCLI(),
         PetSurfaceCLI(),
         # PetSurfaceLongitudinalCLI(),
@@ -243,8 +241,8 @@ def execute():
         T1VolumeRegisterDartelCLI(),
         T1VolumeDartel2MNICLI(),
         T1VolumeParcellationCLI(),
-        # T1FreeSurferTemplateCLI(),
-        # T1FreeSurferLongitudinalCorrectionCLI(),
+        T1FreeSurferTemplateCLI(),
+        T1FreeSurferLongitudinalCorrectionCLI(),
     ]
 
     run_parser = sub_parser.add_parser(

@@ -3,13 +3,6 @@
 """
 Methods used by BIDS converters
 """
-__author__ = "Sabrina Fontanella"
-__copyright__ = "Copyright 2016-2019 The Aramis Lab Team"
-__license__ = "See LICENSE.txt file"
-__version__ = "0.1.0"
-__maintainer__ = "Simona Bottani"
-__email__ = "simona.bottani@icm-institute.org"
-__status__ = "Completed"
 
 
 # -- Methods for the clinical data --
@@ -121,7 +114,7 @@ def create_participants_df(study_name, clinical_spec_path, clinical_data_dir, bi
             participant_df.at[i, 'participant_id'] = bids_id[0]
 
     if len(subjects_to_drop) > 0:
-        cprint('The following subjects of ADNIMERGE were not found in your BIDS folder :\n'
+        cprint('The following subjects of dataset directory were not found in your BIDS folder :\n'
                + ', '.join(subjects_to_drop))
     # Delete all the rows of the subjects that are not available in the BIDS dataset
     if delete_non_bids_info:
@@ -456,13 +449,15 @@ def compute_new_subjects(original_ids, bids_ids):
 
 
 def remove_space_and_symbols(data):
-    '''
+    """
     Remove spaces and  - _ from a list (or a single) of strings
-    :param data: list of strings or a single string to clean
-    :return:
-        data: list of strings or a string without space and symbols _ and -
-    '''
 
+    Args:
+        data: list of strings or a single string to clean
+
+    Returns:
+        data: list of strings or a string without space and symbols _ and -
+    """
     import re
 
     if type(data) is list:

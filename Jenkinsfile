@@ -21,6 +21,8 @@ pipeline {
               echo 'Building Conda environment... ${BRANCH_NAME}'
               sh 'ls'
               sh 'conda env create --force --file environment.yml -n clinica_env_${BRANCH_NAME}'
+              sh 'conda activate clinica_env_$BRANCH_NAME'
+              sh 'pip install -r requirements-dev.txt'
             }
           }
           stage('Build in Mac') {
@@ -35,6 +37,8 @@ pipeline {
               echo 'Building Conda environment...' + 'env.BRANCH_NAME'
               sh 'ls'
               sh 'conda env create --force --file environment.yml -n clinica_env_${BRANCH_NAME}'
+              sh 'conda activate clinica_env_$BRANCH_NAME'
+              sh 'pip install -r requirements-dev.txt'
             }
           }
         }
@@ -57,7 +61,7 @@ pipeline {
               }
             sh '''
                set +x
-               ./.jenkins/scripts/find_env.sh
+               source ./.jenkins/scripts/find_env.sh
                conda info --envs
                eval "$(conda shell.bash hook)"
                conda activate clinica_env_$BRANCH_NAME
@@ -81,8 +85,9 @@ pipeline {
             sh 'echo "Agent name: ${NODE_NAME}"'
             sh '''
                set +x
-               ./.jenkins/scripts/find_env.sh
                eval "$(conda shell.bash hook)"
+               echo $CONDA_PREFIX
+               source ./.jenkins/scripts/find_env.sh
                conda activate clinica_env_$BRANCH_NAME
                echo "Install clinica using pip..."
                pip install --ignore-installed .
@@ -110,8 +115,8 @@ pipeline {
               sh 'echo "Agent name: ${NODE_NAME}"'
               sh '''
                  set +x
-                 ./.jenkins/scripts/find_env.sh
                  eval "$(conda shell.bash hook)"
+                 source ./.jenkins/scripts/find_env.sh
                  conda activate clinica_env_$BRANCH_NAME
                  source /usr/local/Modules/init/profile.sh
                  module load clinica.all
@@ -146,8 +151,8 @@ pipeline {
               sh 'echo "Agent name: ${NODE_NAME}"'
               sh '''
                  set +x
-                 ./.jenkins/scripts/find_env.sh
                  eval "$(conda shell.bash hook)"
+                 source ./.jenkins/scripts/find_env.sh
                  conda activate clinica_env_$BRANCH_NAME
                  source /usr/local/opt/modules/init/bash
                  module load clinica.all

@@ -459,42 +459,6 @@ def test_run_DWIConnectome(cmdopt):
     clean_folder(working_dir, recreate=False)
 
 
-def test_run_fMRIPreprocessing(cmdopt):
-    from os.path import dirname, join, abspath
-    import shutil
-    from clinica.pipelines.fmri_preprocessing.fmri_preprocessing_pipeline import fMRIPreprocessing
-
-    working_dir = cmdopt
-    root = dirname(abspath(join(abspath(__file__), pardir)))
-    root = join(root, 'data', 'fMRIPreprocessing')
-
-    clean_folder(join(root, 'out', 'caps'), recreate=False)
-    clean_folder(join(working_dir, 'fMRIPreprocessing'))
-    shutil.copytree(join(root, 'in', 'caps'), join(root, 'out', 'caps'))
-
-    pipeline = fMRIPreprocessing(
-        bids_directory=join(root, 'in', 'bids'),
-        caps_directory=join(root, 'out', 'caps'),
-        tsv_file=join(root, 'in', 'subjects.tsv'),
-        base_dir=join(working_dir, 'fMRIPreprocessing'),
-    )
-    pipeline.build()
-    pipeline.run(bypass_check=True)
-
-    subject_id = 'sub-01001TMM'
-    out_files = [join(root, 'out', 'caps', 'subjects', subject_id, 'ses-M00', 'fmri', 'preprocessing', subject_id + '_ses-M00_task-rest_bold_space-Ixi549Space_preproc.nii.gz'),
-                 join(root, 'out', 'caps', 'subjects', subject_id, 'ses-M00', 'fmri', 'preprocessing', subject_id + '_ses-M00_task-rest_bold_space-meanBOLD_preproc.nii.gz')]
-
-    ref_files = [join(root, 'ref', subject_id + '_ses-M00_task-rest_bold_space-Ixi549Space_preproc.nii.gz'),
-                 join(root, 'ref', subject_id + '_ses-M00_task-rest_bold_space-meanBOLD_preproc.nii.gz')]
-
-    for i in range(len(out_files)):
-        assert similarity_measure(out_files[i], ref_files[i], 0.99)
-
-    clean_folder(join(root, 'out', 'caps'), recreate=False)
-    clean_folder(join(working_dir, 'fMRIPreprocessing'), recreate=False)
-
-
 def test_run_PETVolume(cmdopt):
     from os.path import dirname, join, abspath
     import shutil
@@ -551,16 +515,14 @@ def test_run_StatisticsSurface(cmdopt):
     shutil.copytree(join(root, 'in', 'caps'), join(root, 'out', 'caps'))
 
     parameters = {
-        'design_matrix': '1 + group + age + sex',
+        'orig_input_data': 't1-freesurfer',
+        'covariates': 'age sex',
         'contrast': 'group',
-        'str_format': '%s %s %s %f %s',
         'group_label': 'UnitTest',
         'glm_type': 'group_comparison',
         'custom_file': '@subject/@session/t1/freesurfer_cross_sectional/@subject_@session/surf/@hemi.thickness.fwhm@fwhm.fsaverage.mgh',
-        'feature_label': 'cortical_thickness',
+        'measure_label': 'ct',
         'full_width_at_half_maximum': 20,
-        'threshold_uncorrected_pvalue': 0.001,
-        'threshold_corrected_pvalue': 0.05,
         'cluster_threshold': 0.001
     }
     pipeline = StatisticsSurface(
@@ -573,8 +535,9 @@ def test_run_StatisticsSurface(cmdopt):
     pipeline.run(plugin='MultiProc', plugin_args={'n_procs': 8}, bypass_check=True)
 
     # Check files
-    out_file = join(root, 'out/caps/groups/group-UnitTest/statistics/surfstat_group_comparison/group-UnitTest_AD-lt-CN_measure-cortical_thickness_fwhm-20_correctedPValue.mat')
-    ref_file = join(root, 'ref/group-UnitTest_AD-lt-CN_measure-cortical_thickness_fwhm-20_correctedPValue.mat')
+    filename = 'group-UnitTest_AD-lt-CN_measure-ct_fwhm-20_correctedPValue.mat'
+    out_file = join(root, 'out', 'caps', 'groups', 'group-UnitTest', 'statistics', 'surfstat_group_comparison', filename)
+    ref_file = join(root, 'ref', filename)
 
     out_file_mat = loadmat(out_file)['correctedpvaluesstruct']
     ref_file_mat = loadmat(ref_file)['correctedpvaluesstruct']
@@ -787,10 +750,7 @@ def test_run_SpatialSVM(cmdopt):
 
 def test_run_T1Linear(cmdopt):
     from os.path import dirname, join, abspath
-    import shutil
     from clinica.pipelines.t1_linear.t1_linear_pipeline import T1Linear
-    import nibabel as nib
-    import numpy as np
 
     working_dir = cmdopt
     root = dirname(abspath(join(abspath(__file__), pardir)))
@@ -799,7 +759,6 @@ def test_run_T1Linear(cmdopt):
     # Remove potential residual of previous UT
     clean_folder(join(working_dir, 'T1Linear'))
     clean_folder(join(root, 'out', 'caps'), recreate=False)
-    shutil.copytree(join(root, 'in', 'caps'), join(root, 'out', 'caps'))
 
     parameters = {
         'uncropped_image': False
@@ -815,7 +774,6 @@ def test_run_T1Linear(cmdopt):
     pipeline.run(plugin='MultiProc', plugin_args={'n_procs': 4}, bypass_check=True)
 
     # Check output vs ref
-
     out_folder = join(root, 'out')
     ref_folder = join(root, 'out')
 
@@ -829,8 +787,6 @@ def test_run_DLPrepareData(cmdopt):
     from os.path import dirname, join, abspath
     import shutil
     from clinica.pipelines.deeplearning_prepare_data.deeplearning_prepare_data_pipeline import DeepLearningPrepareData
-    import nibabel as nib
-    import numpy as np
 
     working_dir = cmdopt
     root = dirname(abspath(join(abspath(__file__), pardir)))
@@ -917,9 +873,10 @@ def test_run_StatisticsVolume(cmdopt):
 
     # Instantiate pipeline and run()
     parameters = {
+        'orig_input_data': 'pet-volume',
         'contrast': 'group',
-        'feature_type': 'fdg',
-        'group_id': 'UnitTest',
+        'measure_label': 'fdg',
+        'group_label': 'UnitTest',
         'cluster_threshold': 0.001,
         'group_id_caps': None,
         'full_width_at_half_maximum': 8
@@ -989,99 +946,99 @@ def test_run_StatisticsVolumeCorrection(cmdopt):
     clean_folder(join(working_dir, 'StatisticsVolumeCorrection'), recreate=False)
 
 
-# def test_run_T1FreeSurferTemplate(cmdopt):
-#     # Data for this functional test comes from https://openneuro.org/datasets/ds000204
-#     # sub-01 was duplicated into to sub-02 with one session in order to test the "one time point" case
-#     import shutil
-#     from os.path import dirname, join, abspath
-#     from clinica.pipelines.t1_freesurfer_longitudinal.t1_freesurfer_template_pipeline import T1FreeSurferTemplate
-#
-#     working_dir = cmdopt
-#     root = dirname(abspath(join(abspath(__file__), pardir)))
-#     root = join(root, 'data', 'T1FreeSurferTemplate')
-#
-#     # Remove potential residual of previous tests
-#     clean_folder(join(root, 'out', 'caps'), recreate=False)
-#     clean_folder(join(working_dir, 'T1FreeSurferTemplate'))
-#
-#     # Copy necessary data from in to out
-#     shutil.copytree(join(root, 'in', 'caps'), join(root, 'out', 'caps'))
-#
-#     pipeline = T1FreeSurferTemplate(
-#         caps_directory=join(root, 'out', 'caps'),
-#         tsv_file=join(root, 'in', 'subjects.tsv'),
-#         base_dir=join(working_dir, 'T1FreeSurferTemplate'),
-#     )
-#     pipeline.base_dir = join(working_dir, 'T1FreeSurferTemplate')
-#     pipeline.run(plugin='MultiProc',
-#                  plugin_args={'n_procs': 2},
-#                  bypass_check=True)
-#
-#     # We only check that folders are the same meaning that FreeSurfer finished without error
-#     # surf/ folder is ignored because it contains sym links that makes hard to check with ref data
-#     # (sym links of ref data are ignored after rsync on CI machines)
-#     def path_to_caps_fs(part_id, long_id):
-#         import os
-#         output_folder = os.path.join('caps', 'subjects', part_id, long_id, 'freesurfer_unbiased_template')
-#         return output_folder
-#
-#     for (p_id, l_id) in zip(['sub-01', 'sub-02'], ['long-20112015', 'long-2011']):
-#         compare_folders(join(root, 'out'), join(root, 'ref'),
-#                         join(path_to_caps_fs(p_id, l_id), p_id + '_' + l_id, 'label'))
-#         compare_folders(join(root, 'out'), join(root, 'ref'),
-#                         join(path_to_caps_fs(p_id, l_id), p_id + '_' + l_id, 'mri'))
-#         compare_folders(join(root, 'out'), join(root, 'ref'),
-#                         join(path_to_caps_fs(p_id, l_id), p_id + '_' + l_id, 'stats'))
-#
-#     clean_folder(join(root, 'out', 'caps'), recreate=False)
-#     clean_folder(join(working_dir, 'T1FreeSurferTemplate'), recreate=False)
+def test_run_T1FreeSurferTemplate(cmdopt):
+    # Data for this functional test comes from https://openneuro.org/datasets/ds000204
+    # sub-01 was duplicated into to sub-02 with one session in order to test the "one time point" case
+    import shutil
+    from os.path import dirname, join, abspath
+    from clinica.pipelines.t1_freesurfer_longitudinal.t1_freesurfer_template_pipeline import T1FreeSurferTemplate
+
+    working_dir = cmdopt
+    root = dirname(abspath(join(abspath(__file__), pardir)))
+    root = join(root, 'data', 'T1FreeSurferTemplate')
+
+    # Remove potential residual of previous tests
+    clean_folder(join(root, 'out', 'caps'), recreate=False)
+    clean_folder(join(working_dir, 'T1FreeSurferTemplate'))
+
+    # Copy necessary data from in to out
+    shutil.copytree(join(root, 'in', 'caps'), join(root, 'out', 'caps'))
+
+    pipeline = T1FreeSurferTemplate(
+        caps_directory=join(root, 'out', 'caps'),
+        tsv_file=join(root, 'in', 'subjects.tsv'),
+        base_dir=join(working_dir, 'T1FreeSurferTemplate'),
+    )
+    pipeline.base_dir = join(working_dir, 'T1FreeSurferTemplate')
+    pipeline.run(plugin='MultiProc',
+                 plugin_args={'n_procs': 2},
+                 bypass_check=True)
+
+    # We only check that folders are the same meaning that FreeSurfer finished without error
+    # surf/ folder is ignored because it contains sym links that makes hard to check with ref data
+    # (sym links of ref data are ignored after rsync on CI machines)
+    def path_to_caps_fs(part_id, long_id):
+        import os
+        output_folder = os.path.join('caps', 'subjects', part_id, long_id, 'freesurfer_unbiased_template')
+        return output_folder
+
+    for (p_id, l_id) in zip(['sub-01', 'sub-02'], ['long-20112015', 'long-2011']):
+        compare_folders(join(root, 'out'), join(root, 'ref'),
+                        join(path_to_caps_fs(p_id, l_id), p_id + '_' + l_id, 'label'))
+        compare_folders(join(root, 'out'), join(root, 'ref'),
+                        join(path_to_caps_fs(p_id, l_id), p_id + '_' + l_id, 'mri'))
+        compare_folders(join(root, 'out'), join(root, 'ref'),
+                        join(path_to_caps_fs(p_id, l_id), p_id + '_' + l_id, 'stats'))
+
+    clean_folder(join(root, 'out', 'caps'), recreate=False)
+    clean_folder(join(working_dir, 'T1FreeSurferTemplate'), recreate=False)
 
 
-# def test_run_T1FreeSurferLongitudinalCorrection(cmdopt):
-#     # Data for this functional test comes from https://openneuro.org/datasets/ds000204
-#     import shutil
-#     from os.path import dirname, join, abspath
-#     from clinica.pipelines.t1_freesurfer_longitudinal.t1_freesurfer_longitudinal_correction_pipeline import T1FreeSurferLongitudinalCorrection
-#
-#     working_dir = cmdopt
-#     root = dirname(abspath(join(abspath(__file__), pardir)))
-#     root = join(root, 'data', 'T1FreeSurferLongitudinalCorrection')
-#
-#     # Remove potential residual of previous tests
-#     clean_folder(join(root, 'out', 'caps'), recreate=False)
-#     clean_folder(join(working_dir, 'T1FreeSurferLongitudinalCorrection'))
-#
-#     # Copy necessary data from in to out
-#     shutil.copytree(join(root, 'in', 'caps'), join(root, 'out', 'caps'))
-#
-#     pipeline = T1FreeSurferLongitudinalCorrection(
-#         caps_directory=join(root, 'out', 'caps'),
-#         tsv_file=join(root, 'in', 'subjects.tsv'),
-#         base_dir=join(working_dir, 'T1FreeSurferLongitudinalCorrection'),
-#     )
-#     pipeline.base_dir = join(working_dir, 'T1FreeSurferLongitudinalCorrection')
-#     pipeline.run(bypass_check=True)
-#
-#     # We only check that folders are the same meaning that FreeSurfer finished without error
-#     # surf/ folder is ignored because it contains sym links that makes hard to check with ref data
-#     # (sym links of ref data are ignored after rsync on CI machines)
-#     def path_to_caps_fs(part_id, sess_id, long_id):
-#         import os
-#         output_folder = os.path.join('caps', 'subjects', part_id, sess_id, 't1', long_id, 'freesurfer_longitudinal')
-#         return output_folder
-#
-#     compare_folders(join(root, 'out'), join(root, 'ref'),
-#                     join(path_to_caps_fs('sub-01', 'ses-2011', 'long-20112015'),
-#                          'regional_measures'))
-#     compare_folders(join(root, 'out'), join(root, 'ref'),
-#                     join(path_to_caps_fs('sub-01', 'ses-2011', 'long-20112015'),
-#                          'sub-01_ses-2011.long.sub-01_long-20112015', 'label'))
-#     compare_folders(join(root, 'out'), join(root, 'ref'),
-#                     join(path_to_caps_fs('sub-01', 'ses-2011', 'long-20112015'),
-#                          'sub-01_ses-2011.long.sub-01_long-20112015', 'mri'))
-#     compare_folders(join(root, 'out'), join(root, 'ref'),
-#                     join(path_to_caps_fs('sub-01', 'ses-2011', 'long-20112015'),
-#                          'sub-01_ses-2011.long.sub-01_long-20112015', 'stats'))
-#
-#     clean_folder(join(root, 'out', 'caps'), recreate=False)
-#     clean_folder(join(working_dir, 'T1FreeSurferLongitudinalCorrection'), recreate=False)
+def test_run_T1FreeSurferLongitudinalCorrection(cmdopt):
+    # Data for this functional test comes from https://openneuro.org/datasets/ds000204
+    import shutil
+    from os.path import dirname, join, abspath
+    from clinica.pipelines.t1_freesurfer_longitudinal.t1_freesurfer_longitudinal_correction_pipeline import T1FreeSurferLongitudinalCorrection
+
+    working_dir = cmdopt
+    root = dirname(abspath(join(abspath(__file__), pardir)))
+    root = join(root, 'data', 'T1FreeSurferLongitudinalCorrection')
+
+    # Remove potential residual of previous tests
+    clean_folder(join(root, 'out', 'caps'), recreate=False)
+    clean_folder(join(working_dir, 'T1FreeSurferLongitudinalCorrection'))
+
+    # Copy necessary data from in to out
+    shutil.copytree(join(root, 'in', 'caps'), join(root, 'out', 'caps'))
+
+    pipeline = T1FreeSurferLongitudinalCorrection(
+        caps_directory=join(root, 'out', 'caps'),
+        tsv_file=join(root, 'in', 'subjects.tsv'),
+        base_dir=join(working_dir, 'T1FreeSurferLongitudinalCorrection'),
+    )
+    pipeline.base_dir = join(working_dir, 'T1FreeSurferLongitudinalCorrection')
+    pipeline.run(bypass_check=True)
+
+    # We only check that folders are the same meaning that FreeSurfer finished without error
+    # surf/ folder is ignored because it contains sym links that makes hard to check with ref data
+    # (sym links of ref data are ignored after rsync on CI machines)
+    def path_to_caps_fs(part_id, sess_id, long_id):
+        import os
+        output_folder = os.path.join('caps', 'subjects', part_id, sess_id, 't1', long_id, 'freesurfer_longitudinal')
+        return output_folder
+
+    compare_folders(join(root, 'out'), join(root, 'ref'),
+                    join(path_to_caps_fs('sub-01', 'ses-2011', 'long-20112015'),
+                         'regional_measures'))
+    compare_folders(join(root, 'out'), join(root, 'ref'),
+                    join(path_to_caps_fs('sub-01', 'ses-2011', 'long-20112015'),
+                         'sub-01_ses-2011.long.sub-01_long-20112015', 'label'))
+    compare_folders(join(root, 'out'), join(root, 'ref'),
+                    join(path_to_caps_fs('sub-01', 'ses-2011', 'long-20112015'),
+                         'sub-01_ses-2011.long.sub-01_long-20112015', 'mri'))
+    compare_folders(join(root, 'out'), join(root, 'ref'),
+                    join(path_to_caps_fs('sub-01', 'ses-2011', 'long-20112015'),
+                         'sub-01_ses-2011.long.sub-01_long-20112015', 'stats'))
+
+    clean_folder(join(root, 'out', 'caps'), recreate=False)
+    clean_folder(join(working_dir, 'T1FreeSurferLongitudinalCorrection'), recreate=False)

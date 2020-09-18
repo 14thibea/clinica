@@ -183,21 +183,6 @@ def test_instantiate_DWIConnectome():
     pipeline.build()
 
 
-def test_instantiate_fMRIPreprocessing():
-    from os.path import dirname, join, abspath
-    from clinica.pipelines.fmri_preprocessing.fmri_preprocessing_pipeline import fMRIPreprocessing
-
-    root = dirname(abspath(join(abspath(__file__), pardir)))
-    root = join(root, 'data', 'fMRIPreprocessing')
-
-    pipeline = fMRIPreprocessing(
-        bids_directory=join(root, 'in', 'bids'),
-        caps_directory=join(root, 'in', 'caps'),
-        tsv_file=join(root, 'in', 'subjects.tsv'),
-    )
-    pipeline.build()
-
-
 def test_instantiate_PETVolume():
     from os.path import dirname, join, abspath
     from clinica.pipelines.pet_volume.pet_volume_pipeline import PETVolume
@@ -224,16 +209,14 @@ def test_instantiate_StatisticsSurface():
     root = dirname(abspath(join(abspath(__file__), pardir)))
     root = join(root, 'data', 'StatisticsSurface')
     parameters = {
-        'design_matrix': '1 + group + age + sex',
+        'orig_input_data': 't1-freesurfer',
+        'covariates': 'age + sex',
         'contrast': 'group',
-        'str_format': '%s %s %s %f %s',
         'group_label': 'UnitTest',
         'glm_type': 'group_comparison',
         'custom_file': '@subject/@session/t1/freesurfer_cross_sectional/@subject_@session/surf/@hemi.thickness.fwhm@fwhm.fsaverage.mgh',
-        'feature_label': 'cortical_thickness',
+        'measure_label': 'ct',
         'full_width_at_half_maximum': 20,
-        'threshold_uncorrected_pvalue': 0.001,
-        'threshold_corrected_pvalue': 0.05,
         'cluster_threshold': 0.001
     }
     pipeline = StatisticsSurface(
@@ -351,32 +334,32 @@ def test_instantiate_SpatialSVM():
     pipeline.build()
 
 
-# def test_instantiate_T1FreeSurferTemplate():
-#     from os.path import dirname, join, abspath
-#     from clinica.pipelines.t1_freesurfer_longitudinal.t1_freesurfer_template_pipeline import T1FreeSurferTemplate
-#
-#     root = dirname(abspath(join(abspath(__file__), pardir)))
-#     root = join(root, 'data', 'T1FreeSurferTemplate')
-#
-#     pipeline = T1FreeSurferTemplate(
-#         caps_directory=join(root, 'in', 'caps'),
-#         tsv_file=join(root, 'in', 'subjects.tsv'),
-#     )
-#     pipeline.build()
+def test_instantiate_T1FreeSurferTemplate():
+    from os.path import dirname, join, abspath
+    from clinica.pipelines.t1_freesurfer_longitudinal.t1_freesurfer_template_pipeline import T1FreeSurferTemplate
+
+    root = dirname(abspath(join(abspath(__file__), pardir)))
+    root = join(root, 'data', 'T1FreeSurferTemplate')
+
+    pipeline = T1FreeSurferTemplate(
+        caps_directory=join(root, 'in', 'caps'),
+        tsv_file=join(root, 'in', 'subjects.tsv'),
+    )
+    pipeline.build()
 
 
-# def test_instantiate_T1FreeSurferLongitudinalCorrection():
-#     from os.path import dirname, join, abspath
-#     from clinica.pipelines.t1_freesurfer_longitudinal.t1_freesurfer_longitudinal_correction_pipeline import T1FreeSurferLongitudinalCorrection
-#
-#     root = dirname(abspath(join(abspath(__file__), pardir)))
-#     root = join(root, 'data', 'T1FreeSurferLongitudinalCorrection')
-#
-#     pipeline = T1FreeSurferLongitudinalCorrection(
-#         caps_directory=join(root, 'in', 'caps'),
-#         tsv_file=join(root, 'in', 'subjects.tsv'),
-#     )
-#     pipeline.build()
+def test_instantiate_T1FreeSurferLongitudinalCorrection():
+    from os.path import dirname, join, abspath
+    from clinica.pipelines.t1_freesurfer_longitudinal.t1_freesurfer_longitudinal_correction_pipeline import T1FreeSurferLongitudinalCorrection
+
+    root = dirname(abspath(join(abspath(__file__), pardir)))
+    root = join(root, 'data', 'T1FreeSurferLongitudinalCorrection')
+
+    pipeline = T1FreeSurferLongitudinalCorrection(
+        caps_directory=join(root, 'in', 'caps'),
+        tsv_file=join(root, 'in', 'subjects.tsv'),
+    )
+    pipeline.build()
 
 
 def test_instantiate_T1Linear():
@@ -425,9 +408,10 @@ def test_instantiate_StatisticsVolume():
 
     # Instantiate pipeline and run()
     parameters = {
+        'orig_input_data': 'pet-volume',
         'contrast': 'group',
-        'feature_type': 'fdg',
-        'group_id': 'UnitTest',
+        'measure_label': 'fdg',
+        'group_label': 'UnitTest',
         'cluster_threshold': 0.001,
         'group_id_caps': None,
         'full_width_at_half_maximum': 8
